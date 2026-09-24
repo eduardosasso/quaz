@@ -1,5 +1,5 @@
 import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import CONFIG from "@qa/config.json";
@@ -7,7 +7,6 @@ import * as Project from "@qa/project";
 
 export const args = (
   project: Project.Project,
-  skill: string,
   revision: string,
   image: string,
   context: string,
@@ -17,8 +16,6 @@ export const args = (
   "-f",
   project.dockerfile || resolve(import.meta.dir, "../../Dockerfile"),
   "--build-context",
-  `guidance=${skill}`,
-  "--build-context",
   `quaz=${resolve(import.meta.dir, "../..")}`,
   ...Object.entries({
     BUN_VERSION: CONFIG.bun,
@@ -26,6 +23,7 @@ export const args = (
     CODEX_VERSION: CONFIG.codex,
     PLAYWRIGHT_MCP_VERSION: CONFIG.playwrightMcp,
     DOCKER_VERSION: CONFIG.docker,
+    OP_VERSION: CONFIG.op,
     QA_REVISION: revision,
   }).flatMap(([key, value]): string[] => ["--build-arg", `${key}=${value}`]),
   "-t",
@@ -52,10 +50,6 @@ if (import.meta.main) {
         type: "string",
         default: "",
       },
-      skill: {
-        type: "string",
-        default: join(homedir(), ".agents/skills/impeccable"),
-      },
       tag: { type: "string", default: `${CONFIG.image}:local` },
     },
   });
@@ -63,14 +57,20 @@ if (import.meta.main) {
   const project: Project.Project = Project.load(resolve(values.project));
   const Runner = await import("@qa/run");
   const revision: string = await Runner.revision(project);
+  const fingerprint: string = Runner.source(project);
   const directory: string = await mkdtemp(join(tmpdir(), "quaz-build-"));
   try {
     const context: string = await stage(project, directory);
-    const child = Bun.spawn(
-      args(project, resolve(values.skill), revision, values.tag, context),
-      { cwd: project.root, stdout: "inherit", stderr: "inherit" },
-    );
+    if (Runner.source({ ...project, root: context }) !== fingerprint)
+      throw new Error("Staged QA image source differs from the project source");
+    const child = Bun.spawn(args(project, revision, values.tag, context), {
+      cwd: project.root,
+      stdout: "inherit",
+      stderr: "inherit",
+    });
     process.exitCode = await child.exited;
+    if (process.exitCode === 0 && Runner.source(project) !== fingerprint)
+      throw new Error("Project source changed during the QA image build");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

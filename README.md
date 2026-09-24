@@ -44,7 +44,7 @@ On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:
 
 Run the **Plan version** workflow on `main` to select a stable SemVer bump from merged commits. Claude chooses major, minor, or patch and gives one reason. The workflow accepts an explicit override. A missing or invalid model answer stops the plan. Apply that plan in a normal pull request, then create an explicit `vX.Y.Z` Git tag on its merged commit. The tag workflow publishes that version tag only when it matches `package.json` and points to a commit on `main`.
 
-The controller image does not bundle an app under test or a private review guide. A project image supplies the disposable app, and the guide is mounted when the controller runs. The extraction cutover gates remain in [draft PR #1](https://github.com/eduardosasso/quaz/pull/1).
+The controller image does not bundle an app under test or a private review guide. A project image supplies the disposable app. The controller copies the mounted review guide into each private run directory. The extraction cutover gates remain in [draft PR #1](https://github.com/eduardosasso/quaz/pull/1).
 
 ## Codex subscription login in Docker
 
@@ -52,10 +52,10 @@ Quaz uses a Codex subscription login for guided reviews. It does not need an Ope
 
 The controller uses `QUAZ_TRACKER_TOKEN` to reach the card API. A 1Password service account can supply that token at launch. It does not sign Codex in. Quaz gives each Codex worker a private copy of the login at `/credential`; it does not give the worker the tracker token. Claude Code OAuth is for GitHub review and release workflows, not Quaz QA workers. Merv access to this repository is a separate GitHub App setting.
 
-Use the same Quaz image for login and for the controller. Set `image` to the exact image tag you plan to run. Then start a one-off login container:
+Build the project image as shown below. Use that image for both login and the controller. Then start a one-off login container:
 
 ```sh
-image=ghcr.io/eduardosasso/quaz:sha-YOUR_COMMIT_SHA
+image=quaz:your-project-revision
 docker volume create quaz-codex-auth
 docker run --rm -it \
   --mount type=volume,src=quaz-codex-auth,dst=/auth \
@@ -73,3 +73,40 @@ docker run --rm \
 ```
 
 Mount `quaz-codex-auth` at `/auth` when starting the controller. Mount another named volume at `/qa`. A review controller stops before scheduling if the auth mount or login file is missing. Docker preserves both named volumes when the containers restart or the image changes. Do not mount a host Codex home directory or copy `auth.json` into the image.
+
+## Controller startup contract
+
+Build a project image with `scripts/qa/image.ts`. It contains Quaz and the selected app sources. The published Quaz release image contains Quaz tools only; it cannot run a target app by itself. Keep app source and project config at the same absolute paths on the Docker host and inside the controller. Set the project config `root` to that source path. Set its `revision` to `source` for this startup path.
+
+The controller needs a project config, a controller config, and a local project image. The controller config names the project config, for example `{"project":"/absolute/path/to/project.json","mode":"auto"}`. Build the image before starting the controller:
+
+```sh
+project_dir=/absolute/path/to/project-config
+source_dir=/absolute/path/to/app-source
+guide_dir=/absolute/path/to/impeccable
+image=quaz:your-project-revision
+bun --no-env-file scripts/qa/image.ts \
+  --project "$project_dir/project.json" --tag "$image"
+```
+
+Create an Overdew personal access token in Account settings. Store it as `QUAZ_TRACKER_TOKEN` in a Quaz 1Password Environment. Copy the Environment ID from 1Password Developer settings and pass it as `QUAZ_ENVIRONMENT`. A service account can reuse an existing token if it has access to this Environment. Pass `OP_SERVICE_ACCOUNT_TOKEN` from the host secret store at container start. Both values must be present together. The controller fails if the tracker token is missing after 1Password loads the Environment. For local checks, you can pass `QUAZ_TRACKER_TOKEN` directly without either 1Password value.
+
+```sh
+docker volume create quaz-state
+docker run --detach --name quaz-controller --restart unless-stopped \
+  --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+  --mount type=volume,src=quaz-state,dst=/qa \
+  --mount type=volume,src=quaz-codex-auth,dst=/auth \
+  --mount "type=bind,src=$project_dir,dst=$project_dir,readonly" \
+  --mount "type=bind,src=$source_dir,dst=$source_dir,readonly" \
+  --mount "type=bind,src=$guide_dir,dst=/opt/impeccable,readonly" \
+  --env OP_SERVICE_ACCOUNT_TOKEN \
+  --env QUAZ_ENVIRONMENT=YOUR_QUAZ_ENVIRONMENT_ID \
+  --env QUAZ_TRACKER_URL=https://your-tracker.example \
+  --env QUAZ_TRACKER_BOARD=owner/board \
+  "$image" controller --config "$project_dir/controller.json"
+```
+
+This command starts recurring QA work. Use it only after the extraction cutover checks pass. The controller has the Docker socket, so it must run on a trusted Docker host. It gives each worker only private `/qa` run subpaths, a read-only guide copy, and a per-run `/credential` copy. The worker gets an ephemeral bridge token. It has no Docker socket, tracker token, 1Password token, or Claude token. The app server receives adapter-provided variables. Quaz removes the worker after the run and reconciles any Codex login refresh into `/auth` under a lock.
+
+Docker image builds receive only public version and revision arguments. They do not receive Codex, 1Password, tracker, or Claude credentials. GitHub Actions uses its temporary `GITHUB_TOKEN` to publish the image. Claude review and release planning use `CLAUDE_CODE_OAUTH_TOKEN` in their jobs. Those tokens never enter the image build. The project image stages only the app sources listed in `project.json`; do not list secret files.

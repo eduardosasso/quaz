@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as Client from "@qa/client";
 import CONFIG from "@qa/config.json";
@@ -26,6 +26,12 @@ import * as Protocol from "@/qa_protocol";
 
 const ROOT: string = resolve(import.meta.dir, "../..");
 const MILLISECONDS: number = 1000;
+const GUIDE_FILES: string[] = [
+  "SKILL.md",
+  ...["critique", "audit", "polish", "layout", "typeset", "adapt"].map(
+    (name: string): string => `reference/${name}.md`,
+  ),
+];
 export type Options = {
   mode: Protocol.Mode;
   testers: number;
@@ -153,7 +159,15 @@ export const revision = async (
   project: Project.Project,
   runtime?: Docker.Runtime,
 ): Promise<string> => {
-  if (project.revision === "source") return source(project);
+  if (project.revision === "source") {
+    const current: string = source(project);
+    if (runtime && runtime.revision !== current)
+      throw new Error(
+        "Project source changed since the QA image build; rebuild the project image",
+      );
+
+    return current;
+  }
   if (runtime) return Protocol.revision.parse(runtime.revision);
   if (
     await command(
@@ -171,6 +185,7 @@ export const container = (
   input: Options,
   run: Protocol.Run,
   directory: string,
+  guide: string,
   credential: string,
   image: string,
   bridge: { url: string; token: string },
@@ -209,6 +224,11 @@ export const container = (
       "--mount",
       Docker.mount(input.runtime, join(directory, "input"), "/input", true),
     );
+    if (run.mode !== "smoke")
+      args.push(
+        "--mount",
+        Docker.mount(input.runtime, guide, CONFIG.controller.skill, true),
+      );
   } else {
     args.push(
       "--mount",
@@ -408,22 +428,39 @@ export const recover = async (
     };
   return conclusion;
 };
+export const validateGuide = (skill: string): void => {
+  const reference: string = join(skill, "reference");
+  if (!existsSync(reference) || !lstatSync(reference).isDirectory())
+    throw new Error("Missing Impeccable guide directory: reference");
+  for (const guide of GUIDE_FILES)
+    if (
+      !existsSync(join(skill, guide)) ||
+      !lstatSync(join(skill, guide)).isFile()
+    )
+      throw new Error(`Missing Impeccable guide: ${guide}`);
+};
 export const validate = (input: Options): void => {
   if (input.mode !== "smoke") {
-    if (!lstatSync(input.auth).isFile())
-      throw new Error("Run codex login first");
-    for (const guide of [
-      "SKILL.md",
-      ...["critique", "audit", "polish", "layout", "typeset", "adapt"].map(
-        (name: string): string => `reference/${name}.md`,
-      ),
-    ])
-      if (!existsSync(join(input.skill, guide)))
-        throw new Error(`Missing Impeccable guide: ${guide}`);
+    if (!existsSync(input.auth) || !lstatSync(input.auth).isFile())
+      throw new Error(
+        `Missing Codex login at ${input.auth}; run codex login --device-auth`,
+      );
+    validateGuide(input.skill);
   }
   for (const path of [input.project, input.auth, input.skill])
     if (path.includes(",") || path.includes("\n"))
       throw new Error("Docker paths must not contain commas or newlines");
+};
+export const copyGuide = async (
+  skill: string,
+  destination: string,
+): Promise<void> => {
+  validateGuide(skill);
+  for (const guide of GUIDE_FILES) {
+    const target: string = join(destination, guide);
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(join(skill, guide), target);
+  }
 };
 export const run = async (
   input: Options,
@@ -451,6 +488,9 @@ export const run = async (
     input.runtime?.directory ?? input.output ?? join(ROOT, "artifacts/qa");
   await mkdir(temporary, { recursive: true });
   const scratch: string = await mkdtemp(join(temporary, "temporary-"));
+  const guide: string = join(scratch, "guide");
+  if (input.runtime && input.mode !== "smoke")
+    await copyGuide(input.skill, guide);
   const prefix: string = `qa-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const records: Protocol.Run[] = [];
   const attempts: string[] = [];
@@ -580,8 +620,12 @@ export const run = async (
       console.log(`Preparing ${project.id} QA image`);
       active();
       const context: string = await Image.stage(project, scratch);
+      if (source({ ...project, root: context }) !== fingerprint)
+        throw new Error(
+          "Staged QA image source differs from the project source",
+        );
       const preparation = Bun.spawn(
-        Image.args(project, input.skill, selectedRevision, image, context),
+        Image.args(project, selectedRevision, image, context),
         {
           cwd: project.root,
           stdout: Bun.file(join(scratch, "build.log")),
@@ -713,10 +757,18 @@ export const run = async (
                 scenario: selection.ticket?.test.scenario ?? record.scenario,
               };
               const child = Bun.spawn(
-                container(input, selected, directory, credential, image, {
-                  url: `http://${hostname}:${bridge.port}`,
-                  token: bridgeToken,
-                }),
+                container(
+                  input,
+                  selected,
+                  directory,
+                  guide,
+                  credential,
+                  image,
+                  {
+                    url: `http://${hostname}:${bridge.port}`,
+                    token: bridgeToken,
+                  },
+                ),
                 {
                   cwd: project.root,
                   stdout: Bun.file(join(output, "worker.log")),
@@ -860,6 +912,7 @@ export const run = async (
     throw error;
   } finally {
     await cleanup();
+    if (input.runtime) await rm(guide, { recursive: true, force: true });
     process.removeListener("SIGINT", interrupted);
     process.removeListener("SIGTERM", interrupted);
     signal?.removeEventListener("abort", interrupted);

@@ -8,8 +8,12 @@ FROM node:${NODE_VERSION}-bookworm-slim
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium ca-certificates git gh fonts-noto-color-emoji \
+ && apt-get install -y --no-install-recommends chromium ca-certificates curl unzip git gh fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/*
+
+ARG OP_VERSION
+COPY --from=quaz /scripts/qa/install-op.sh /tmp/install-op.sh
+RUN sh /tmp/install-op.sh "${OP_VERSION}" && rm /tmp/install-op.sh
 
 ARG CODEX_VERSION
 ARG PLAYWRIGHT_MCP_VERSION
@@ -28,7 +32,6 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun --no-env-file run build && mkdir -p /app/uploads
-COPY --from=guidance / /opt/impeccable/
 ARG QA_REVISION
 LABEL app.qa.revision=${QA_REVISION}
 ENV QUAZ_DB=/qa/state.db

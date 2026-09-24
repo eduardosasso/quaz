@@ -6,6 +6,7 @@
   "testers": 2,
   "maxTesters": 10,
   "docker": "28.4.0",
+  "op": "2.39.1-beta.01",
   "controller": {
     "parallel": 2,
     "pollSeconds": 30,

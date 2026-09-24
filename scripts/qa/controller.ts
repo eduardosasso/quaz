@@ -55,6 +55,15 @@ export const schema = z
 export type Settings = z.infer<typeof schema>;
 export type Job = { mode: Protocol.Mode; scenario: string; ticket?: number };
 export type Active = { job: Job; promise: Promise<void> };
+export const trackerToken = (env: NodeJS.ProcessEnv): string => {
+  const token: string = env.QUAZ_TRACKER_TOKEN ?? "";
+  if (!token)
+    throw new Error(
+      "Missing QUAZ_TRACKER_TOKEN; provide it at runtime or through QUAZ_ENVIRONMENT",
+    );
+
+  return token;
+};
 const failed = (run: Protocol.Run): boolean =>
   ["failed", "expired"].includes(run.status);
 export const timestamp = (run: Protocol.Run): number => {
@@ -338,6 +347,7 @@ export const start = async (
   const runtime: Docker.Runtime = await Docker.inspect(
     settings.mode !== "smoke",
   );
+  const token: string = trackerToken(process.env);
   await mkdir(runtime.directory, { recursive: true });
   const lock = await open(
     join(runtime.directory, "controller.lock"),
@@ -374,11 +384,7 @@ export const start = async (
       attention: settings.attention,
     };
     Runner.validate(input);
-    const client: Client.Client = Client.connect(
-      input.url,
-      input.board,
-      process.env.QUAZ_TRACKER_TOKEN ?? "",
-    );
+    const client: Client.Client = Client.connect(input.url, input.board, token);
     const destination: string = JSON.stringify({
       url: new URL(input.url).origin,
       board: input.board,
