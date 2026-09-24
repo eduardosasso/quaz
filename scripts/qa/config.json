@@ -1,0 +1,32 @@
+{
+  "bun": "1.4.0",
+  "node": "24.11.1",
+  "codex": "0.154.0",
+  "playwrightMcp": "0.0.82",
+  "testers": 2,
+  "maxTesters": 10,
+  "docker": "28.4.0",
+  "controller": {
+    "parallel": 2,
+    "pollSeconds": 30,
+    "intervalSeconds": 300,
+    "retrySeconds": 30,
+    "attempts": 3,
+    "directory": "/qa",
+    "skill": "/opt/impeccable",
+    "auth": "/auth/auth.json",
+    "label": "app.qa.controller"
+  },
+  "seconds": 1800,
+  "minSeconds": 90,
+  "maxSeconds": 1800,
+  "cleanupSeconds": 10,
+  "browserCalls": 60,
+  "writingSeconds": 90,
+  "reasoningEffort": "low",
+  "memory": "2g",
+  "sharedMemory": "512m",
+  "temporaryMemory": "1g",
+  "processLimit": 512,
+  "image": "quaz"
+}

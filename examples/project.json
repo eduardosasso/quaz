@@ -1,0 +1,13 @@
+{
+  "id": "example",
+  "root": "../your-app",
+  "sources": ["package.json", "bun.lock", "src"],
+  "settings": {
+    "command": "[\"bun\",\"--no-env-file\",\"run\",\"dev\"]",
+    "origin": "http://127.0.0.1:3000/",
+    "entry": "/",
+    "ready": "/"
+  },
+  "scenarios": ["empty"],
+  "revision": "git"
+}

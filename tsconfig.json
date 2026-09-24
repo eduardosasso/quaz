@@ -1,0 +1,14 @@
+{
+  "exclude": ["node_modules", "artifacts"],
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "types": ["bun", "node"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@qa/*": ["./scripts/qa/*"]
+    }
+  }
+}

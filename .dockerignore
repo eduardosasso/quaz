@@ -1,0 +1,5 @@
+.git
+node_modules
+artifacts
+.env
+.dev.secrets

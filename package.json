@@ -1,0 +1,23 @@
+{
+  "name": "quaz",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "lint": "biome check --write .",
+    "check": "tsc --noEmit",
+    "test": "bun --no-env-file test",
+    "qa": "bun --no-env-file scripts/qa/run.ts",
+    "qa:controller": "bun --no-env-file scripts/qa/controller.ts",
+    "qa:eval": "bun --no-env-file scripts/qa/eval.ts"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/bun": "latest",
+    "typescript": "^7.0.2"
+  }
+}
