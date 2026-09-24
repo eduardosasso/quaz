@@ -129,6 +129,27 @@ test("Claude failure logs expose only a fixed diagnosis", () => {
   expect(Provider.failure("unexpected secret=private")).toBe(
     "Claude exited without a classified error",
   );
+  expect(
+    Provider.failure(
+      "",
+      '{"type":"result","is_error":true,"api_error_status":401,"result":"Invalid bearer token"}',
+    ),
+  ).toBe("Claude authentication failed");
+  expect(
+    Provider.failure(
+      "",
+      '{"type":"result","is_error":true,"api_error_status":429}',
+    ),
+  ).toBe("Claude request was rate limited");
+  expect(
+    Provider.failure(
+      "",
+      '{"type":"assistant","message":{"content":[{"type":"tool_use","input":{"api_error_status":401}}]}}\n{"type":"result","is_error":true,"api_error_status":429}',
+    ),
+  ).toBe("Claude request was rate limited");
+  expect(Provider.failure("MCP server failed", '{"type":"system"')).toBe(
+    "Claude browser failed to start",
+  );
 });
 
 test("Claude receives a schema without the unsupported draft marker", () => {

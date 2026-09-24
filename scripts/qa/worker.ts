@@ -414,8 +414,12 @@ const phase = async (
       join("/tmp/qa-raw", name, "events.raw.stderr.log"),
       "utf8",
     );
+    const stdout: string = await readFile(
+      join("/tmp/qa-raw", name, "events.raw.jsonl"),
+      "utf8",
+    );
     throw new Error(
-      `${name} agent exited ${code}: ${Provider.failure(stderr)}`,
+      `${name} agent exited ${code}: ${Provider.failure(stderr, stdout)}`,
     );
   }
 
@@ -498,8 +502,12 @@ export const compare = async (
       join("/tmp/qa-raw/matching/events.raw.stderr.log"),
       "utf8",
     );
+    const stdout: string = await readFile(
+      join("/tmp/qa-raw/matching/events.raw.jsonl"),
+      "utf8",
+    );
     throw new Error(
-      `Duplicate reviewer exited ${code}: ${Provider.failure(stderr)}`,
+      `Duplicate reviewer exited ${code}: ${Provider.failure(stderr, stdout)}`,
     );
   }
   await provider.collect(

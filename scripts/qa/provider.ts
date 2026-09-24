@@ -174,7 +174,36 @@ export const schema = (value: z.ZodType): string => {
 };
 export const redacted = (value: string, token: string): string =>
   token ? value.replaceAll(token, "[REDACTED]") : value;
-export const failure = (stderr: string): string => {
+const frame = (line: string): unknown => {
+  try {
+    return JSON.parse(line) as unknown;
+  } catch (error: unknown) {
+    if (!(error instanceof SyntaxError)) throw error;
+    console.error("Claude stream contains an incomplete JSON frame");
+
+    return null;
+  }
+};
+export const failure = (stderr: string, stdout: string = ""): string => {
+  const terminal = stdout
+    .split("\n")
+    .filter((line: string): boolean => line.length > 0)
+    .map(frame)
+    .map((value: unknown) =>
+      z
+        .object({
+          type: z.literal("result"),
+          is_error: z.literal(true),
+          api_error_status: z.number().optional(),
+        })
+        .safeParse(value),
+    )
+    .filter((value) => value.success)
+    .at(-1);
+  if (terminal?.data.api_error_status === 401)
+    return "Claude authentication failed";
+  if (terminal?.data.api_error_status === 429)
+    return "Claude request was rate limited";
   const reasons: Array<[RegExp, string]> = [
     [/sandbox|bubblewrap|bwrap/i, "Claude sandbox failed"],
     [
