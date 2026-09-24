@@ -9,7 +9,8 @@
     "test": "bun --no-env-file test",
     "qa": "bun --no-env-file scripts/qa/run.ts",
     "qa:controller": "bun --no-env-file scripts/qa/controller.ts",
-    "qa:eval": "bun --no-env-file scripts/qa/eval.ts"
+    "qa:eval": "bun --no-env-file scripts/qa/eval.ts",
+    "qa:eval:verify": "bun --no-env-file scripts/qa/verify-eval.ts"
   },
   "dependencies": {
     "playwright": "^1.63.0",

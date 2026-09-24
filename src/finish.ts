@@ -254,10 +254,9 @@ export const publish = async (
         .get(run.project, `ticket-${run.target}`, id, Date.now());
       const valid: boolean = Boolean(
         target &&
-          (pending?.publish ||
-            (target.version === run.snapshot &&
-              [COMPLETED, ARCHIVED].includes(target.status) &&
-              tags(target.tags).has(Protocol.TAG.pending))) &&
+          target.version === run.snapshot &&
+          [COMPLETED, ARCHIVED].includes(target.status) &&
+          tags(target.tags).has(Protocol.TAG.pending) &&
           target.status !== DELETED &&
           owned &&
           !expired,
@@ -279,9 +278,9 @@ export const publish = async (
           });
           state.db
             .query(
-              "UPDATE qa_findings SET verified_through=(SELECT rowid FROM qa_runs WHERE id=?) WHERE note_id=?",
+              "UPDATE qa_findings SET verified_through=(SELECT MAX(rowid) FROM qa_runs) WHERE note_id=?",
             )
-            .run(id, target.id);
+            .run(target.id);
         }
         if (input.verdict === "fail") {
           await state.tracker.reopen(target.id);
@@ -344,6 +343,7 @@ export const publish = async (
           const prior: Tracker.Card | null = await state.tracker.get(target);
           if (!prior || prior.status === DELETED)
             throw new Error("Duplicate card is unavailable");
+          const managed = state.finding(target);
           const copied: number[] = await attach(
             state,
             id,
@@ -360,6 +360,10 @@ export const publish = async (
               target,
               JSON.stringify(finding.test),
             );
+          if (!managed)
+            await state.tracker.update(target, {
+              tagsAdd: `${Protocol.TAG.issue},${Protocol.TAG.pending},project:${run.project}`,
+            });
           const newer = state.db
             .query<{ verified_through: number }, [number]>(
               "SELECT verified_through FROM qa_findings WHERE note_id=?",

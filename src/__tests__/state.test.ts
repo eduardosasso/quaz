@@ -293,6 +293,225 @@ test("failed verification reopens the card and records a comment", async () => {
   expect(comments.get(issue.id)).toHaveLength(1);
 });
 
+test("verification retry rejects a changed card", async () => {
+  const { state, cards } = fixture();
+  const issue: Tracker.Card = await state.tracker.create(
+    "Broken save",
+    { tags: "qa,needs-verification,project:sample" },
+    "issue",
+  );
+  await state.tracker.complete(issue.id);
+  state.db
+    .query(
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix) VALUES (?,?,?,?,?)",
+    )
+    .run(
+      "sample",
+      "c".repeat(64),
+      issue.id,
+      JSON.stringify({
+        flow: "save-draft",
+        route: "/",
+        steps: ["Save"],
+        expected: "Saved",
+        scenario: "empty",
+      }),
+      revision,
+    );
+  const run: Protocol.Run = await state.begin(begin("verify"));
+  state.ready(run.id);
+  await state.claim(run.id, `ticket-${issue.id}`, "Saved", issue.id);
+  const bytes: Uint8Array = new TextEncoder().encode("proof");
+  const attachment: number = (
+    await state.tracker.upload(run.note_id, "proof.txt", bytes, "text/plain")
+  ).id;
+  state.db
+    .query(
+      "INSERT INTO qa_artifacts (run,path,digest,mime,attachment) VALUES (?,?,?,?,?)",
+    )
+    .run(
+      run.id,
+      "proof.txt",
+      createHash("sha256").update(bytes).digest("hex"),
+      "text/plain",
+      attachment,
+    );
+  const result: Protocol.Finish = {
+    status: "complete",
+    summary: "Save works",
+    report: {},
+    findings: [],
+    evidence: [attachment],
+    verdict: "pass",
+    deployment: { expected: revision, deployed: revision, tested: revision },
+  };
+  const attachments: Tracker.Tracker["attachments"] = state.tracker.attachments;
+  state.tracker.attachments = async (): Promise<Tracker.Attachment[]> => {
+    throw new Error("API interrupted before any mutation");
+  };
+  await expect(Finish.publish(state, run.id, result)).rejects.toThrow(
+    "API interrupted before any mutation",
+  );
+  state.tracker.attachments = attachments;
+  await state.tracker.reopen(issue.id);
+  await state.tracker.update(issue.id, {
+    title: "Human changed acceptance criteria",
+    tagsRemove: "needs-verification",
+  });
+
+  const retry: Finish.Result = await Finish.publish(state, run.id, result);
+  expect(retry.run.status).toBe("superseded");
+  expect(cards.get(issue.id)?.tags).not.toContain("verified");
+});
+
+test("matched card becomes a tracked issue", async () => {
+  const { state } = fixture();
+  const issue: Tracker.Card = await state.tracker.create(
+    "Existing report",
+    { tags: "project:sample" },
+    "existing",
+  );
+  const run: Protocol.Run = await state.begin(begin("discover"));
+  state.ready(run.id);
+  await state.claim(run.id, "save-draft", "Save retains text");
+  const bytes: Uint8Array = new TextEncoder().encode("proof");
+  const attachment: number = (
+    await state.tracker.upload(run.note_id, "proof.txt", bytes, "text/plain")
+  ).id;
+  state.db
+    .query(
+      "INSERT INTO qa_artifacts (run,path,digest,mime,attachment) VALUES (?,?,?,?,?)",
+    )
+    .run(
+      run.id,
+      "proof.txt",
+      createHash("sha256").update(bytes).digest("hex"),
+      "text/plain",
+      attachment,
+    );
+  const catalog: Protocol.Catalog | null = await state.publication(run.id);
+  if (!catalog) throw new Error("Publication lease missing");
+  const found: Protocol.Finding = finding(attachment);
+  const result: Protocol.Finish = {
+    status: "complete",
+    summary: "Matched existing report",
+    report: {},
+    findings: [found],
+    evidence: [attachment],
+    verdict: "none",
+    deployment: null,
+    matching: {
+      snapshot: catalog.snapshot,
+      decisions: [
+        {
+          fingerprint: found.fingerprint,
+          verdict: "existing",
+          target: issue.id,
+          sameAs: null,
+          reason: "Same issue",
+        },
+      ],
+    },
+  };
+  await Finish.publish(state, run.id, result);
+  await state.tracker.complete(issue.id);
+
+  expect(
+    (await state.state("sample")).tickets.map((ticket) => ticket.id),
+  ).toEqual([issue.id]);
+});
+
+test("older discovery cannot reopen a newly verified issue", async () => {
+  const { state, cards } = fixture();
+  const issue: Tracker.Card = await state.tracker.create(
+    "Broken save",
+    { tags: "qa,needs-verification,project:sample" },
+    "issue",
+  );
+  await state.tracker.complete(issue.id);
+  const found: Protocol.Finding = finding(1);
+  state.db
+    .query(
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix) VALUES (?,?,?,?,?)",
+    )
+    .run(
+      "sample",
+      found.fingerprint,
+      issue.id,
+      JSON.stringify(found.test),
+      revision,
+    );
+  const verify: Protocol.Run = await state.begin(begin("verify"));
+  state.ready(verify.id);
+  await state.claim(verify.id, `ticket-${issue.id}`, "Save works", issue.id);
+  const discover: Protocol.Run = await state.begin(begin("discover"));
+  state.ready(discover.id);
+  await state.claim(discover.id, found.test.flow, "Save retains text");
+  const bytes: Uint8Array = new TextEncoder().encode("proof");
+  const hash: string = createHash("sha256").update(bytes).digest("hex");
+  const verifyFile: number = (
+    await state.tracker.upload(
+      verify.note_id,
+      "verify.txt",
+      bytes,
+      "text/plain",
+    )
+  ).id;
+  const discoverFile: number = (
+    await state.tracker.upload(
+      discover.note_id,
+      "discover.txt",
+      bytes,
+      "text/plain",
+    )
+  ).id;
+  for (const [run, path, attachment] of [
+    [verify.id, "verify.txt", verifyFile],
+    [discover.id, "discover.txt", discoverFile],
+  ] as const)
+    state.db
+      .query(
+        "INSERT INTO qa_artifacts (run,path,digest,mime,attachment) VALUES (?,?,?,?,?)",
+      )
+      .run(run, path, hash, "text/plain", attachment);
+  await Finish.publish(state, verify.id, {
+    status: "complete",
+    summary: "Save works",
+    report: {},
+    findings: [],
+    evidence: [verifyFile],
+    verdict: "pass",
+    deployment: { expected: revision, deployed: revision, tested: revision },
+  });
+  const catalog: Protocol.Catalog | null = await state.publication(discover.id);
+  if (!catalog) throw new Error("Publication lease missing");
+  await Finish.publish(state, discover.id, {
+    status: "complete",
+    summary: "Old discovery result",
+    report: {},
+    findings: [finding(discoverFile)],
+    evidence: [discoverFile],
+    verdict: "none",
+    deployment: null,
+    matching: {
+      snapshot: catalog.snapshot,
+      decisions: [
+        {
+          fingerprint: found.fingerprint,
+          verdict: "existing",
+          target: issue.id,
+          sameAs: null,
+          reason: "Same issue",
+        },
+      ],
+    },
+  });
+
+  expect(cards.get(issue.id)?.status).toBe(1);
+  expect(cards.get(issue.id)?.tags).toContain("verified");
+  expect(state.finding(issue.id)?.fix).toBe(revision);
+});
+
 test("same-run findings retain both fingerprints", async () => {
   const { state } = fixture();
   const run = await state.begin(begin("discover"));

@@ -9,7 +9,7 @@ import { z } from "zod";
 const REPEATS: number = 2;
 const JUDGES: number = 2;
 const SECONDS: number = 300;
-const PARALLEL: number = 2;
+export const PARALLEL: number = 2;
 const SPLITS = ["calibration", "holdout", "all"] as const;
 export type Split = (typeof SPLITS)[number];
 const text = z.string().trim().min(1);

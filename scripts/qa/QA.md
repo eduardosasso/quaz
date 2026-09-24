@@ -26,6 +26,7 @@ Use a general flow name without fixture, tester, or random identifiers. Rejected
 Define one expected result before acting. Exercise its success, prevention, failure, recovery, return, and persistence paths.
 Write acceptance criteria only for the reproduced problem. Each criterion must be checkable by repeating the saved steps.
 Do not add hypothetical failure cases, alternative fixes, or untested behavior to a ticket's acceptance criteria.
+State the required user outcome precisely. Readable identity, full display-name visibility, and a reachable action are separate requirements. Do not turn a reproduced loss of identity into a blanket ban on text shortening. Require every character only when the task or supplied product rule needs it.
 
 Apply all six supplied criteria to this same case:
 - critique: Is the goal clear? Does feedback match the action? Can the user return or recover?
