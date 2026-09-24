@@ -335,7 +335,9 @@ export const start = async (
   settings: Settings,
   signal: AbortSignal,
 ): Promise<void> => {
-  const runtime: Docker.Runtime = await Docker.inspect();
+  const runtime: Docker.Runtime = await Docker.inspect(
+    settings.mode !== "smoke",
+  );
   await mkdir(runtime.directory, { recursive: true });
   const lock = await open(
     join(runtime.directory, "controller.lock"),

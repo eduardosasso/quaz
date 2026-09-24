@@ -45,3 +45,31 @@ On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:
 Run the **Plan version** workflow on `main` to select a stable SemVer bump from merged commits. Claude chooses major, minor, or patch and gives one reason. The workflow accepts an explicit override. A missing or invalid model answer stops the plan. Apply that plan in a normal pull request, then create an explicit `vX.Y.Z` Git tag on its merged commit. The tag workflow publishes that version tag only when it matches `package.json` and points to a commit on `main`.
 
 The controller image does not bundle an app under test or a private review guide. A project image supplies the disposable app, and the guide is mounted when the controller runs. The extraction cutover gates remain in [draft PR #1](https://github.com/eduardosasso/quaz/pull/1).
+
+## Codex subscription login in Docker
+
+Quaz uses a Codex subscription login for guided reviews. It does not need an OpenAI API key. Keep the login in a dedicated Docker named volume. The controller requires that volume mounted read and write at `/auth`. It reads `/auth/auth.json` and saves refreshed credentials there after a run. The private `/qa` state volume is separate.
+
+The controller uses `QUAZ_TRACKER_TOKEN` to reach the card API. A 1Password service account can supply that token at launch. It does not sign Codex in. Quaz gives each Codex worker a private copy of the login at `/credential`; it does not give the worker the tracker token. Claude Code OAuth is for GitHub review and release workflows, not Quaz QA workers. Merv access to this repository is a separate GitHub App setting.
+
+Use the same Quaz image for login and for the controller. Set `image` to the exact image tag you plan to run. Then start a one-off login container:
+
+```sh
+image=ghcr.io/eduardosasso/quaz:sha-YOUR_COMMIT_SHA
+docker volume create quaz-codex-auth
+docker run --rm -it \
+  --mount type=volume,src=quaz-codex-auth,dst=/auth \
+  --env HOME=/auth --env CODEX_HOME=/auth \
+  --entrypoint codex "$image" login --device-auth
+```
+
+Open the link shown by Codex and enter its one-time code. Verify the stored login with the same volume:
+
+```sh
+docker run --rm \
+  --mount type=volume,src=quaz-codex-auth,dst=/auth \
+  --env HOME=/auth --env CODEX_HOME=/auth \
+  --entrypoint codex "$image" login status
+```
+
+Mount `quaz-codex-auth` at `/auth` when starting the controller. Mount another named volume at `/qa`. A review controller stops before scheduling if the auth mount or login file is missing. Docker preserves both named volumes when the containers restart or the image changes. Do not mount a host Codex home directory or copy `auth.json` into the image.

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { relative } from "node:path";
+import { dirname, relative } from "node:path";
 import CONFIG from "@qa/config.json";
 import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
@@ -32,6 +32,18 @@ const description = z.object({
   Id: z.string(),
   Image: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   Config: z.object({ Labels: z.record(z.string(), z.string()).nullable() }),
+  HostConfig: z.object({
+    Mounts: z
+      .array(
+        z.object({
+          Type: z.string(),
+          Source: z.string().optional(),
+          Target: z.string(),
+        }),
+      )
+      .nullable(),
+    Binds: z.array(z.string()).nullable(),
+  }),
   Mounts: z.array(
     z.object({
       Type: z.string(),
@@ -41,15 +53,53 @@ const description = z.object({
     }),
   ),
 });
-export const runtime = (value: unknown): Runtime => {
+export const runtime = (
+  value: unknown,
+  needsAuth: boolean = false,
+): Runtime => {
   const self = description.parse(value);
+  const named = (name: string, destination: string): boolean =>
+    Boolean(
+      self.HostConfig.Mounts?.some(
+        (item): boolean =>
+          item.Type === "volume" &&
+          item.Source === name &&
+          item.Target === destination,
+      ) ||
+        self.HostConfig.Binds?.some(
+          (item): boolean =>
+            item === `${name}:${destination}` ||
+            item.startsWith(`${name}:${destination}:`),
+        ),
+    );
   const mount = self.Mounts.find(
     (item): boolean => item.Destination === CONFIG.controller.directory,
   );
-  if (mount?.Type !== "volume" || !mount.Name || !mount.RW)
+  if (
+    mount?.Type !== "volume" ||
+    !mount.Name ||
+    !mount.RW ||
+    !named(mount.Name, CONFIG.controller.directory)
+  )
     throw new Error(
       `Controller requires a writable named volume at ${CONFIG.controller.directory}`,
     );
+  if (needsAuth) {
+    const directory: string = dirname(CONFIG.controller.auth);
+    const credential: (typeof self.Mounts)[number] | undefined =
+      self.Mounts.find((item): boolean => item.Destination === directory);
+    if (
+      credential?.Type !== "volume" ||
+      !credential.Name ||
+      !credential.RW ||
+      !named(credential.Name, directory)
+    )
+      throw new Error(
+        `Controller requires a writable named volume at ${directory} for Codex login`,
+      );
+    if (credential.Name === mount.Name)
+      throw new Error("Codex login and controller state need separate volumes");
+  }
   const owner: string = createHash("sha256")
     .update(mount.Name)
     .digest("hex")
@@ -64,7 +114,7 @@ export const runtime = (value: unknown): Runtime => {
     owner,
   };
 };
-export const inspect = async (): Promise<Runtime> => {
+export const inspect = async (needsAuth: boolean = false): Promise<Runtime> => {
   if (!process.env.HOSTNAME || !(await Bun.file("/.dockerenv").exists()))
     throw new Error(
       "Controller requires Docker; leave the container hostname at its default",
@@ -72,6 +122,7 @@ export const inspect = async (): Promise<Runtime> => {
 
   return runtime(
     JSON.parse(await command(["inspect", process.env.HOSTNAME]))[0],
+    needsAuth,
   );
 };
 export const mount = (
