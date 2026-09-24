@@ -1,12 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Image from "@qa/image";
@@ -42,6 +35,64 @@ test("image context copies only declared sources", async () => {
   ).toThrow();
 });
 
+test("project image extends a pinned Quaz base", () => {
+  const project: Project.Project = Project.schema.parse({
+    id: "sample",
+    root: "/sample",
+    sources: ["app.ts"],
+    scenarios: ["empty"],
+  });
+  const base: string = `sha256:${"a".repeat(64)}`;
+  const args: string[] = Image.args(
+    project,
+    "source-revision",
+    "quaz:sample",
+    "/staged",
+    base,
+  );
+  expect(args).toContain(`QUAZ_BASE=${base}`);
+  expect(args).toContain("QA_REVISION=source-revision");
+  expect(args).not.toContain("--build-context");
+  expect(args.at(-1)).toBe("/staged");
+  expect(Image.baseArgs("base-revision", "0.1.0")).toContain(
+    "SOURCE_REVISION=base-revision",
+  );
+  expect(Image.baseArgs("base-revision", "0.1.0")).toContain(
+    "IMPECCABLE_VERSION=4.3.1",
+  );
+});
+
+test("base image override needs an immutable digest", async () => {
+  const before: string | undefined = process.env.QUAZ_BASE_IMAGE;
+  try {
+    process.env.QUAZ_BASE_IMAGE = "quaz:latest";
+    await expect(Image.base()).rejects.toThrow("immutable image digest");
+  } finally {
+    if (before) process.env.QUAZ_BASE_IMAGE = before;
+    else delete process.env.QUAZ_BASE_IMAGE;
+  }
+  expect(
+    Image.matches(
+      {
+        "org.opencontainers.image.source":
+          "https://github.com/eduardosasso/quaz",
+        "org.opencontainers.image.revision": "current",
+      },
+      "current",
+    ),
+  ).toBe(true);
+  expect(
+    Image.matches(
+      {
+        "org.opencontainers.image.source":
+          "https://github.com/eduardosasso/quaz",
+        "org.opencontainers.image.revision": "old",
+      },
+      "current",
+    ),
+  ).toBe(false);
+});
+
 test("controller rejects a project image built from older source", async () => {
   const folder: string = mkdtempSync(join(tmpdir(), "quaz-revision-"));
   folders.push(folder);
@@ -65,44 +116,4 @@ test("controller rejects a project image built from older source", async () => {
       owner: "controller",
     }),
   ).rejects.toThrow("rebuild the project image");
-});
-
-test("worker guide omits unrelated private files", async () => {
-  const folder: string = mkdtempSync(join(tmpdir(), "quaz-guide-"));
-  folders.push(folder);
-  const source: string = join(folder, "source");
-  const destination: string = join(folder, "copied");
-  mkdirSync(join(source, "reference"), { recursive: true });
-  writeFileSync(join(source, "SKILL.md"), "guide");
-  for (const name of [
-    "critique",
-    "audit",
-    "polish",
-    "layout",
-    "typeset",
-    "adapt",
-  ])
-    writeFileSync(join(source, "reference", `${name}.md`), name);
-  writeFileSync(join(source, "private-token.txt"), "secret");
-  await Runner.copyGuide(source, destination);
-  expect(readFileSync(join(destination, "SKILL.md"), "utf8")).toBe("guide");
-  await expect(
-    Bun.file(join(destination, "private-token.txt")).exists(),
-  ).resolves.toBe(false);
-});
-
-test("worker guide rejects a linked reference directory", async () => {
-  const folder: string = mkdtempSync(join(tmpdir(), "quaz-linked-guide-"));
-  folders.push(folder);
-  const skill: string = join(folder, "skill");
-  const reference: string = join(folder, "private");
-  mkdirSync(skill);
-  mkdirSync(reference);
-  symlinkSync(reference, join(skill, "reference"));
-  expect((): void => Runner.validateGuide(skill)).toThrow(
-    "Missing Impeccable guide directory",
-  );
-  await expect(Runner.copyGuide(skill, join(folder, "copied"))).rejects.toThrow(
-    "Missing Impeccable guide directory",
-  );
 });

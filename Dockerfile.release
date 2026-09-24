@@ -15,11 +15,49 @@ ARG OP_VERSION
 COPY scripts/qa/install-op.sh /tmp/install-op.sh
 RUN sh /tmp/install-op.sh "${OP_VERSION}" && rm /tmp/install-op.sh
 
-ARG CODEX_VERSION
 ARG PLAYWRIGHT_MCP_VERSION
 WORKDIR /tools
-RUN bun add --exact @openai/codex@${CODEX_VERSION} @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}
-ENV PATH="/tools/node_modules/.bin:${PATH}" HOME=/tmp/home
+RUN bun add --exact @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}
+ENV PATH="/tools/node_modules/.bin:${PATH}"
+
+ARG CLAUDE_VERSION
+ARG IMPECCABLE_VERSION
+ARG IMPECCABLE_SHA256
+ARG IMPECCABLE_ENGINE_VERSION
+ARG IMPECCABLE_ENGINE_ARM64_SHA256
+ARG IMPECCABLE_ENGINE_X64_SHA256
+ARG TARGETARCH
+RUN useradd --create-home --shell /bin/bash quaz
+USER quaz
+ENV HOME=/home/quaz
+RUN curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_VERSION}"
+RUN curl -fsSL --retry 3 "https://github.com/pbakaus/impeccable/releases/download/skill-v${IMPECCABLE_VERSION}/universal.zip" -o /tmp/impeccable.zip \
+ && echo "${IMPECCABLE_SHA256}  /tmp/impeccable.zip" | sha256sum -c - \
+ && unzip -q /tmp/impeccable.zip '.claude/skills/impeccable/*' -d /home/quaz \
+ && rm /tmp/impeccable.zip
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      arm64) engine_arch=arm64; engine_sha="${IMPECCABLE_ENGINE_ARM64_SHA256}" ;; \
+      amd64) engine_arch=x64; engine_sha="${IMPECCABLE_ENGINE_X64_SHA256}" ;; \
+      *) echo "Unsupported Impeccable architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    skill=/home/quaz/.claude/skills/impeccable; \
+    curl -fsSL --retry 3 "https://github.com/pbakaus/impeccable/releases/download/engine-v${IMPECCABLE_ENGINE_VERSION}/impeccable-linux-${engine_arch}" -o /tmp/impeccable-engine; \
+    echo "${engine_sha}  /tmp/impeccable-engine" | sha256sum -c -; \
+    mkdir -p "${skill}/scripts/bin/linux-${engine_arch}"; \
+    install -m 755 /tmp/impeccable-engine "${skill}/scripts/bin/linux-${engine_arch}/impeccable"; \
+    rm /tmp/impeccable-engine
+USER root
+ENV PATH="/home/quaz/.local/bin:${PATH}"
+RUN claude --version
+RUN set -eu; \
+    test -f /home/quaz/.claude/skills/impeccable/SKILL.md; \
+    test -x /home/quaz/.claude/skills/impeccable/scripts/impeccable; \
+    for guide in critique audit polish layout typeset adapt; do \
+      test -f "/home/quaz/.claude/skills/impeccable/reference/${guide}.md"; \
+    done; \
+    ln -s /home/quaz/.claude/skills/impeccable /opt/impeccable
+ENV HOME=/tmp/home
 
 WORKDIR /quaz
 COPY package.json bun.lock tsconfig.json ./

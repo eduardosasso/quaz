@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import CONFIG from "@qa/config.json";
 import type { Page } from "playwright";
 import { z } from "zod";
 
@@ -555,15 +556,8 @@ export const inspect = async (
   const files: string[] = await source(ROOT, paths);
   const stdout: string = await new Promise((resolve, reject): void => {
     execFile(
-      "node",
-      [
-        join(
-          process.env.QA_SKILL_PATH ?? "/opt/impeccable",
-          "scripts/detect.mjs",
-        ),
-        "--json",
-        ...files,
-      ],
+      join(CONFIG.controller.skill, "scripts/impeccable"),
+      ["detect", "--json", ...files],
       { cwd: ROOT, timeout: TIMEOUT, maxBuffer: DETECTOR_BYTES },
       (error, stdout, stderr): void => {
         if (error && error.code !== 2) {

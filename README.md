@@ -44,46 +44,23 @@ On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:
 
 Run the **Plan version** workflow on `main` to select a stable SemVer bump from merged commits. Claude chooses major, minor, or patch and gives one reason. The workflow accepts an explicit override. A missing or invalid model answer stops the plan. Apply that plan in a normal pull request, then create an explicit `vX.Y.Z` Git tag on its merged commit. The tag workflow publishes that version tag only when it matches `package.json` and points to a commit on `main`.
 
-The controller image does not bundle an app under test or a private review guide. A project image supplies the disposable app. The controller copies the mounted review guide into each private run directory. The extraction cutover gates remain in [draft PR #1](https://github.com/eduardosasso/quaz/pull/1).
+The shared Quaz image holds the QA tools, runner, and pinned Impeccable skill. The default app Dockerfile adds only that app and extends a pinned Quaz base digest. Custom Dockerfiles must preserve this base and the `app.qa.revision` label. The same app image runs controller, worker, and all QA modes. Claude discovers the installed skill at its isolated skill path. The extraction cutover gates remain in [draft PR #1](https://github.com/eduardosasso/quaz/pull/1).
 
-## Codex subscription login in Docker
+## Claude subscription token
 
-Quaz uses a Codex subscription login for guided reviews. It does not need an OpenAI API key. Keep the login in a dedicated Docker named volume. The controller requires that volume mounted read and write at `/auth`. It reads `/auth/auth.json` and saves refreshed credentials there after a run. The private `/qa` state volume is separate.
+Quaz uses Claude Code for guided reviews. Run `claude setup-token` on a trusted machine. Put its output in `CLAUDE_CODE_OAUTH_TOKEN` in Quaz's 1Password Environment. The token lasts one year. Renew it before expiry. Do not put it in an image, project source, or `.env` file.
 
-The controller uses `QUAZ_TRACKER_TOKEN` to reach the card API. A 1Password service account can supply that token at launch. It does not sign Codex in. Quaz gives each Codex worker a private copy of the login at `/credential`; it does not give the worker the tracker token. Claude Code OAuth is for GitHub review and release workflows, not Quaz QA workers. Merv access to this repository is a separate GitHub App setting.
-
-Build the project image as shown below. Use that image for both login and the controller. Then start a one-off login container:
-
-```sh
-image=quaz:your-project-revision
-docker volume create quaz-codex-auth
-docker run --rm -it \
-  --mount type=volume,src=quaz-codex-auth,dst=/auth \
-  --env HOME=/auth --env CODEX_HOME=/auth \
-  --entrypoint codex "$image" login --device-auth
-```
-
-Open the link shown by Codex and enter its one-time code. Verify the stored login with the same volume:
-
-```sh
-docker run --rm \
-  --mount type=volume,src=quaz-codex-auth,dst=/auth \
-  --env HOME=/auth --env CODEX_HOME=/auth \
-  --entrypoint codex "$image" login status
-```
-
-Mount `quaz-codex-auth` at `/auth` when starting the controller. Mount another named volume at `/qa`. A review controller stops before scheduling if the auth mount or login file is missing. Docker preserves both named volumes when the containers restart or the image changes. Do not mount a host Codex home directory or copy `auth.json` into the image.
+The controller reads `QUAZ_TRACKER_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from Quaz's Environment at launch. It gives each worker a private token file under `/qa`. Only the Claude review process receives that token in its environment. Claude scrubs credentials from tool subprocesses. Raw Claude logs stay on the worker's temporary filesystem and are never tracker artifacts. The app server receives adapter-provided variables. The worker never receives the tracker or 1Password service token. Merv's Claude token remains separate.
 
 ## Controller startup contract
 
-Build a project image with `scripts/qa/image.ts`. It contains Quaz and the selected app sources. The published Quaz release image contains Quaz tools only; it cannot run a target app by itself. Keep app source and project config at the same absolute paths on the Docker host and inside the controller. Set the project config `root` to that source path. Set its `revision` to `source` for this startup path.
+Build a project image with `scripts/qa/image.ts`. It builds the shared Quaz base locally, then adds only the selected app sources. Set `QUAZ_BASE_IMAGE` to a registry image with an `@sha256:` digest to use a published base instead. The published base must match a clean Quaz checkout at the same commit. The shared image cannot run a target app by itself. Keep app source and project config at the same absolute paths on the Docker host and inside the controller. Set the project config `root` to that source path. Set its `revision` to `source` for this startup path.
 
 The controller needs a project config, a controller config, and a local project image. The controller config names the project config, for example `{"project":"/absolute/path/to/project.json","mode":"auto"}`. Build the image before starting the controller:
 
 ```sh
 project_dir=/absolute/path/to/project-config
 source_dir=/absolute/path/to/app-source
-guide_dir=/absolute/path/to/impeccable
 image=quaz:your-project-revision
 bun --no-env-file scripts/qa/image.ts \
   --project "$project_dir/project.json" --tag "$image"
@@ -96,17 +73,15 @@ docker volume create quaz-state
 docker run --detach --name quaz-controller --restart unless-stopped \
   --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
   --mount type=volume,src=quaz-state,dst=/qa \
-  --mount type=volume,src=quaz-codex-auth,dst=/auth \
   --mount "type=bind,src=$project_dir,dst=$project_dir,readonly" \
   --mount "type=bind,src=$source_dir,dst=$source_dir,readonly" \
-  --mount "type=bind,src=$guide_dir,dst=/opt/impeccable,readonly" \
   --env OP_SERVICE_ACCOUNT_TOKEN \
-  --env QUAZ_ENVIRONMENT=YOUR_QUAZ_ENVIRONMENT_ID \
+  --env QUAZ_ENVIRONMENT=oideewasrzxrhplsrtvqlozjna \
   --env QUAZ_TRACKER_URL=https://your-tracker.example \
   --env QUAZ_TRACKER_BOARD=owner/board \
   "$image" controller --config "$project_dir/controller.json"
 ```
 
-This command starts recurring QA work. Use it only after the extraction cutover checks pass. The controller has the Docker socket, so it must run on a trusted Docker host. It gives each worker only private `/qa` run subpaths, a read-only guide copy, and a per-run `/credential` copy. The worker gets an ephemeral bridge token. It has no Docker socket, tracker token, 1Password token, or Claude token. The app server receives adapter-provided variables. Quaz removes the worker after the run and reconciles any Codex login refresh into `/auth` under a lock.
+This command starts recurring QA work. Use it only after the extraction cutover checks pass. The controller has the Docker socket, so it must run on a trusted Docker host. It gives each worker only private `/qa` run subpaths and a per-run `/credential` token. The worker gets an ephemeral bridge token. It has no Docker socket, tracker token, or 1Password token. Quaz removes the worker and its token file after the run.
 
-Docker image builds receive only public version and revision arguments. They do not receive Codex, 1Password, tracker, or Claude credentials. GitHub Actions uses its temporary `GITHUB_TOKEN` to publish the image. Claude review and release planning use `CLAUDE_CODE_OAUTH_TOKEN` in their jobs. Those tokens never enter the image build. The project image stages only the app sources listed in `project.json`; do not list secret files.
+Docker image builds receive only public version, base digest, and revision arguments. They do not receive 1Password, tracker, or Claude credentials. GitHub Actions uses its temporary `GITHUB_TOKEN` to publish the shared image. Claude review and release planning use a separate `CLAUDE_CODE_OAUTH_TOKEN` in their jobs. Those tokens never enter the image build. The project image stages only the app sources listed in `project.json`; do not list secret files.

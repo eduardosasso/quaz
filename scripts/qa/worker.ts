@@ -1,7 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, openSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, join } from "node:path";
 import CONFIG from "@qa/config.json";
 import * as Coverage from "@qa/coverage";
 import * as Duplicates from "@qa/duplicates";
@@ -17,6 +24,7 @@ let ORIGIN: string;
 let ENTRY: string;
 let READY: string;
 let PROJECT: Project.Project;
+let CREDENTIAL: string;
 const OUTPUT: string = "/output";
 const APP: string = "/app";
 const WORK: string = OUTPUT;
@@ -26,7 +34,6 @@ const MCP: string = "/tools/node_modules/@playwright/mcp/cli.js";
 const MILLISECONDS: number = 1000;
 const BOOT_SECONDS: number = 45;
 const ACTION_MS: number = 15_000;
-const INSPECTION_SECONDS: number = 60;
 const STOP_MS: number = 2000;
 const REPORT_SECONDS: number = 5;
 const MATCHING_SECONDS: number = 120;
@@ -72,9 +79,11 @@ const launch = (
 ): ChildProcess => {
   const descriptors: number[] = [];
   try {
-    const output: number = openSync(join(OUTPUT, `${name}.jsonl`), "w");
+    const root: string = name.endsWith("events.raw") ? "/tmp/qa-raw" : OUTPUT;
+    mkdirSync(dirname(join(root, name)), { recursive: true });
+    const output: number = openSync(join(root, `${name}.jsonl`), "w");
     descriptors.push(output);
-    const errors: number = openSync(join(OUTPUT, `${name}.stderr.log`), "w");
+    const errors: number = openSync(join(root, `${name}.stderr.log`), "w");
     descriptors.push(errors);
     const child: ChildProcess = spawn(command, args, {
       cwd,
@@ -172,14 +181,9 @@ const mcp = (phase: Phase): string[] => {
   ];
 
   return [
-    "-c",
-    'mcp_servers.mobile.command="node"',
-    "-c",
-    `mcp_servers.mobile.args=${JSON.stringify(args)}`,
-    "-c",
-    "mcp_servers.mobile.startup_timeout_sec=15",
-    "-c",
-    `mcp_servers.mobile.tool_timeout_sec=${INSPECTION_SECONDS}`,
+    "--strict-mcp-config",
+    "--mcp-config",
+    JSON.stringify({ mcpServers: { mobile: { command: "node", args } } }),
   ];
 };
 
@@ -299,7 +303,7 @@ const guidance = async (
 ): Promise<Instructions> => {
   const value: Instructions = await instructions({
     policy: "/quaz/scripts/qa/QA.md",
-    skill: process.env.QA_SKILL_PATH ?? "/skill",
+    skill: CONFIG.controller.skill,
     context: PROJECT.context,
     scenario: options.scenario,
     fixture: fixture.metadata,
@@ -342,17 +346,20 @@ const phase = async (
       : "MODE: discover. Test narrow, landscape, wide and text scaling within the selected flow. Complete every required check; do not stop after the happy path. The validator independently reproduces candidates, then audits the remaining check evidence.";
   const instruction: string = `${policy}\nROLE: ${name}. Scenario: ${options.scenario}.\nApp: ${ORIGIN}${ENTRY}. Browser: start at 390x844. Output folder: /output/${name}.\n${scope}\n${assignment}\nTIME: ${seconds} seconds remain. Check date -u +%s before exploration. Finish browser work and evidence audits at Unix ${exploration}; reserve the remaining time for final JSON. Return final JSON by Unix ${Math.floor(deadline / MILLISECONDS)}. Use at most ${CONFIG.browserCalls} browser calls. Batch related interactions with the browser code tool. Missing evidence stays blocked and keeps the review incomplete.\nTake screenshots without a filename, inspect the inline image, and retain its returned relative path. Return JSON directly; do not write duplicate report files.`;
   await writeFile(join(OUTPUT, name, "prompt.md"), instruction);
-  const invocation: Provider.Invocation = Provider.select("codex").invocation({
+  const provider: Provider.Provider = Provider.select("claude");
+  const invocation: Provider.Invocation = provider.invocation({
     work: WORK,
     schema: schemaPath,
     result: join(OUTPUT, name, "result.json"),
     browser: mcp(name),
+    token: CREDENTIAL,
+    skill: CONFIG.controller.skill,
     model: options.model,
   });
   const child: ChildProcess = launch(
     invocation.command,
     invocation.args,
-    `${name}/events`,
+    `${name}/events.raw`,
     {
       ...invocation.env,
       QA_RUN_ID: options.runId,
@@ -365,14 +372,33 @@ const phase = async (
     WORK,
   );
   child.stdin?.end(instruction);
-  const code: number = await completion(
-    child,
-    Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
-  );
+  let code: number;
+  try {
+    code = await completion(
+      child,
+      Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
+    );
+  } finally {
+    await Provider.scrub(
+      join("/tmp/qa-raw", name, "events.raw.jsonl"),
+      CREDENTIAL,
+    );
+    await Provider.scrub(
+      join("/tmp/qa-raw", name, "events.raw.stderr.log"),
+      CREDENTIAL,
+    );
+  }
   if (code !== 0)
     throw new Error(
-      `${name} agent exited ${code}; inspect ${name}/events.stderr.log`,
+      `${name} agent exited ${code}; inspect the temporary Claude log`,
     );
+
+  await provider.collect(
+    join("/tmp/qa-raw", name, "events.raw.jsonl"),
+    join(OUTPUT, name, "events.jsonl"),
+    join(OUTPUT, name, "result.json"),
+    true,
+  );
 
   return JSON.parse(
     await readFile(join(OUTPUT, name, "result.json"), "utf8"),
@@ -408,26 +434,46 @@ export const compare = async (
   await writeFile(schema, JSON.stringify(z.toJSONSchema(Protocol.decisions)));
   const instruction: string = Duplicates.prompt(catalog, candidates);
   await writeFile(join(OUTPUT, "matching/prompt.md"), instruction);
-  const invocation: Provider.Invocation = Provider.select("codex").invocation({
+  const provider: Provider.Provider = Provider.select("claude");
+  const invocation: Provider.Invocation = provider.invocation({
     work: WORK,
     schema,
     result: join(OUTPUT, "matching/result.json"),
     browser: [],
+    token: CREDENTIAL,
     model,
   });
   const child: ChildProcess = launch(
     invocation.command,
     invocation.args,
-    "matching/events",
+    "matching/events.raw",
     invocation.env,
     WORK,
   );
   child.stdin?.end(instruction);
-  const code: number = await completion(
-    child,
-    Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
-  );
+  let code: number;
+  try {
+    code = await completion(
+      child,
+      Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
+    );
+  } finally {
+    await Provider.scrub(
+      join("/tmp/qa-raw/matching/events.raw.jsonl"),
+      CREDENTIAL,
+    );
+    await Provider.scrub(
+      join("/tmp/qa-raw/matching/events.raw.stderr.log"),
+      CREDENTIAL,
+    );
+  }
   if (code !== 0) throw new Error(`Duplicate reviewer exited ${code}`);
+  await provider.collect(
+    join("/tmp/qa-raw/matching/events.raw.jsonl"),
+    join(OUTPUT, "matching/events.jsonl"),
+    join(OUTPUT, "matching/result.json"),
+    false,
+  );
   const result: Protocol.Matching = Duplicates.validate(
     JSON.parse(await readFile(join(OUTPUT, "matching/result.json"), "utf8")),
     catalog,
@@ -632,6 +678,14 @@ const main = async (): Promise<void> => {
     budget: process.env.QA_BUDGET_SECONDS,
     model: process.env.QA_MODEL,
   });
+  CREDENTIAL =
+    options.mode === "smoke"
+      ? ""
+      : (await readFile("/credential/token", "utf8")).trim();
+  if (options.mode !== "smoke") {
+    if (!CREDENTIAL) throw new Error("Missing Claude QA token");
+    await unlink("/credential/token");
+  }
   const deadline: number = started + options.budget * MILLISECONDS;
   await mkdir(OUTPUT, { recursive: true });
   const timer: ReturnType<typeof setTimeout> = setTimeout(

@@ -74,7 +74,7 @@ jobs:
           echo "node=$(jq -r .node "$config")" >> "$GITHUB_OUTPUT"
           echo "docker=$(jq -r .docker "$config")" >> "$GITHUB_OUTPUT"
           echo "op=$(jq -r .op "$config")" >> "$GITHUB_OUTPUT"
-          echo "codex=$(jq -r .codex "$config")" >> "$GITHUB_OUTPUT"
+          echo "claude=$(jq -r .claude "$config")" >> "$GITHUB_OUTPUT"
           echo "playwright_mcp=$(jq -r .playwrightMcp "$config")" >> "$GITHUB_OUTPUT"
           echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
 
@@ -100,7 +100,7 @@ jobs:
             NODE_VERSION=${{ steps.image.outputs.node }}
             DOCKER_VERSION=${{ steps.image.outputs.docker }}
             OP_VERSION=${{ steps.image.outputs.op }}
-            CODEX_VERSION=${{ steps.image.outputs.codex }}
+            CLAUDE_VERSION=${{ steps.image.outputs.claude }}
             PLAYWRIGHT_MCP_VERSION=${{ steps.image.outputs.playwright_mcp }}
             SOURCE_REVISION=${{ github.sha }}
             IMAGE_VERSION=${{ steps.image.outputs.version }}

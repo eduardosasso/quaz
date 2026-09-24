@@ -191,6 +191,7 @@ const files = async (root: string, prefix: string = ""): Promise<string[]> => {
     else if (
       /\.(png|json|jsonl|log|md|txt|ya?ml)$/.test(name) &&
       !name.endsWith("schema.json") &&
+      !name.startsWith("events.raw") &&
       name !== "recovery.json" &&
       name !== "project.json" &&
       name !== "assignment.json"

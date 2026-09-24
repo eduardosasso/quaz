@@ -1,17 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import {
+  chown,
   copyFile,
   mkdir,
   mkdtemp,
-  open,
   readFile,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as Client from "@qa/client";
 import CONFIG from "@qa/config.json";
@@ -21,17 +20,10 @@ import * as Lifecycle from "@qa/lifecycle";
 import * as Project from "@qa/project";
 import * as Provider from "@qa/provider";
 import { z } from "zod";
-import * as Storage from "@/local_storage_native";
 import * as Protocol from "@/qa_protocol";
 
 const ROOT: string = resolve(import.meta.dir, "../..");
 const MILLISECONDS: number = 1000;
-const GUIDE_FILES: string[] = [
-  "SKILL.md",
-  ...["critique", "audit", "polish", "layout", "typeset", "adapt"].map(
-    (name: string): string => `reference/${name}.md`,
-  ),
-];
 export type Options = {
   mode: Protocol.Mode;
   testers: number;
@@ -40,8 +32,6 @@ export type Options = {
   project: string;
   url: string;
   board: string;
-  skill: string;
-  auth: string;
   provider: string;
   attention?: string;
   model?: string;
@@ -61,12 +51,7 @@ export const options = (args: string[]): Options => {
       project: { type: "string" },
       tracker: { type: "string", default: process.env.QUAZ_TRACKER_URL ?? "" },
       board: { type: "string", default: process.env.QUAZ_TRACKER_BOARD ?? "" },
-      skill: {
-        type: "string",
-        default: join(homedir(), ".agents/skills/impeccable"),
-      },
-      auth: { type: "string", default: join(homedir(), ".codex/auth.json") },
-      provider: { type: "string", default: "codex" },
+      provider: { type: "string", default: "claude" },
       attention: { type: "string" },
       model: { type: "string" },
       resume: { type: "string" },
@@ -109,8 +94,6 @@ export const options = (args: string[]): Options => {
     project: resolve(values.project),
     url: values.tracker,
     board: values.board,
-    skill: resolve(values.skill),
-    auth: resolve(values.auth),
     ...(values.output ? { output: resolve(values.output) } : {}),
     provider: values.provider,
     attention: values.attention,
@@ -185,11 +168,14 @@ export const container = (
   input: Options,
   run: Protocol.Run,
   directory: string,
-  guide: string,
   credential: string,
   image: string,
   bridge: { url: string; token: string },
 ): string[] => {
+  const identity = Docker.user(
+    process.getuid?.() ?? 0,
+    process.getgid?.() ?? 0,
+  );
   const args: string[] = [
     "docker",
     "run",
@@ -211,7 +197,7 @@ export const container = (
     "--tmpfs",
     `/app/uploads:rw,nosuid,size=${CONFIG.temporaryMemory},mode=1777`,
     "--user",
-    `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+    `${identity.uid}:${identity.gid}`,
   ];
   if (input.runtime) {
     args.push(
@@ -224,11 +210,6 @@ export const container = (
       "--mount",
       Docker.mount(input.runtime, join(directory, "input"), "/input", true),
     );
-    if (run.mode !== "smoke")
-      args.push(
-        "--mount",
-        Docker.mount(input.runtime, guide, CONFIG.controller.skill, true),
-      );
   } else {
     args.push(
       "--mount",
@@ -256,7 +237,6 @@ export const container = (
   if (input.runtime) {
     env.QA_PROJECT_PATH = "/input/project.json";
     env.QA_ASSIGNMENT_PATH = "/input/assignment.json";
-    env.QA_SKILL_PATH = CONFIG.controller.skill;
   }
   for (const [key, value] of Object.entries(env))
     args.push("--env", `${key}=${value}`);
@@ -266,43 +246,9 @@ export const container = (
       Docker.mount(input.runtime, credential, "/credential"),
     );
   if (run.mode !== "smoke" && !input.runtime)
-    args.push(
-      "--mount",
-      `type=bind,src=${input.skill},dst=/skill,readonly`,
-      "--mount",
-      `type=bind,src=${credential},dst=/credential`,
-    );
+    args.push("--mount", `type=bind,src=${credential},dst=/credential`);
   args.push(image, "worker");
   return args;
-};
-export const restoreAuth = async (
-  input: Options,
-  directory: string,
-  initial: Buffer,
-): Promise<void> => {
-  const changed: Buffer = await readFile(join(directory, "auth.json"));
-  if (changed.equals(initial)) return;
-  const lock = await open(`${input.auth}.qa-lock`, "a", 0o600);
-  try {
-    if (!Storage.tryExclusiveLock(lock.fd))
-      throw new Error(
-        "Another QA run is renewing Codex credentials; newer credentials were preserved",
-      );
-    const current: Buffer = await readFile(input.auth);
-    if (!current.equals(initial) && !current.equals(changed))
-      throw new Error(
-        "Concurrent Codex credential renewal needs a fresh login; newer credentials were preserved",
-      );
-    const temporary: string = `${input.auth}.${randomUUID()}.tmp`;
-    await writeFile(temporary, changed, { mode: 0o600 });
-    try {
-      await rename(temporary, input.auth);
-    } finally {
-      await rm(temporary, { force: true });
-    }
-  } finally {
-    await lock.close();
-  }
 };
 export const journal = async (
   directory: string,
@@ -428,39 +374,15 @@ export const recover = async (
     };
   return conclusion;
 };
-export const validateGuide = (skill: string): void => {
-  const reference: string = join(skill, "reference");
-  if (!existsSync(reference) || !lstatSync(reference).isDirectory())
-    throw new Error("Missing Impeccable guide directory: reference");
-  for (const guide of GUIDE_FILES)
-    if (
-      !existsSync(join(skill, guide)) ||
-      !lstatSync(join(skill, guide)).isFile()
-    )
-      throw new Error(`Missing Impeccable guide: ${guide}`);
-};
 export const validate = (input: Options): void => {
   if (input.mode !== "smoke") {
-    if (!existsSync(input.auth) || !lstatSync(input.auth).isFile())
+    if (!process.env.CLAUDE_CODE_OAUTH_TOKEN)
       throw new Error(
-        `Missing Codex login at ${input.auth}; run codex login --device-auth`,
+        "Missing CLAUDE_CODE_OAUTH_TOKEN for guided Quaz reviews",
       );
-    validateGuide(input.skill);
   }
-  for (const path of [input.project, input.auth, input.skill])
-    if (path.includes(",") || path.includes("\n"))
-      throw new Error("Docker paths must not contain commas or newlines");
-};
-export const copyGuide = async (
-  skill: string,
-  destination: string,
-): Promise<void> => {
-  validateGuide(skill);
-  for (const guide of GUIDE_FILES) {
-    const target: string = join(destination, guide);
-    await mkdir(dirname(target), { recursive: true });
-    await copyFile(join(skill, guide), target);
-  }
+  if (input.project.includes(",") || input.project.includes("\n"))
+    throw new Error("Docker paths must not contain commas or newlines");
 };
 export const run = async (
   input: Options,
@@ -488,9 +410,6 @@ export const run = async (
     input.runtime?.directory ?? input.output ?? join(ROOT, "artifacts/qa");
   await mkdir(temporary, { recursive: true });
   const scratch: string = await mkdtemp(join(temporary, "temporary-"));
-  const guide: string = join(scratch, "guide");
-  if (input.runtime && input.mode !== "smoke")
-    await copyGuide(input.skill, guide);
   const prefix: string = `qa-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const records: Protocol.Run[] = [];
   const attempts: string[] = [];
@@ -619,13 +538,14 @@ export const run = async (
     if (!input.runtime) {
       console.log(`Preparing ${project.id} QA image`);
       active();
+      const base: string = await Image.base();
       const context: string = await Image.stage(project, scratch);
       if (source({ ...project, root: context }) !== fingerprint)
         throw new Error(
           "Staged QA image source differs from the project source",
         );
       const preparation = Bun.spawn(
-        Image.args(project, selectedRevision, image, context),
+        Image.args(project, selectedRevision, image, context, base),
         {
           cwd: project.root,
           stdout: Bun.file(join(scratch, "build.log")),
@@ -676,8 +596,6 @@ export const run = async (
             result: null,
           };
           let conclusion: Protocol.Finish | undefined;
-          let initial: Buffer | undefined;
-          let credentialError: string | undefined;
 
           const bridgeToken: string = randomUUID();
           endpoints.set(bridgeToken, { run: record });
@@ -735,17 +653,24 @@ export const run = async (
                 );
               }
               if (input.mode !== "smoke") {
-                initial = await readFile(input.auth);
-                await writeFile(join(credential, "auth.json"), initial, {
-                  mode: 0o600,
-                });
-                await writeFile(`${credential}.initial.next`, initial, {
-                  mode: 0o600,
-                });
-                await rename(
-                  `${credential}.initial.next`,
-                  `${credential}.initial`,
+                await writeFile(
+                  join(credential, "token"),
+                  process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
+                  {
+                    mode: 0o600,
+                  },
                 );
+              }
+              if (process.getuid?.() === 0) {
+                const worker = Docker.user(0, 0);
+                await chown(output, worker.uid, worker.gid);
+                await chown(credential, worker.uid, worker.gid);
+                if (input.mode !== "smoke")
+                  await chown(
+                    join(credential, "token"),
+                    worker.uid,
+                    worker.gid,
+                  );
               }
               active();
               names.add(record.id);
@@ -757,18 +682,10 @@ export const run = async (
                 scenario: selection.ticket?.test.scenario ?? record.scenario,
               };
               const child = Bun.spawn(
-                container(
-                  input,
-                  selected,
-                  directory,
-                  guide,
-                  credential,
-                  image,
-                  {
-                    url: `http://${hostname}:${bridge.port}`,
-                    token: bridgeToken,
-                  },
-                ),
+                container(input, selected, directory, credential, image, {
+                  url: `http://${hostname}:${bridge.port}`,
+                  token: bridgeToken,
+                }),
                 {
                   cwd: project.root,
                   stdout: Bun.file(join(output, "worker.log")),
@@ -846,22 +763,11 @@ export const run = async (
             );
           } finally {
             endpoints.delete(bridgeToken);
-            try {
-              if (initial) await restoreAuth(input, credential, initial);
-            } catch (error: unknown) {
-              credentialError = String(error);
-              await writeFile(
-                join(output, "credential-error.json"),
-                JSON.stringify({ error: credentialError }),
-              );
-            } finally {
-              await rm(credential, { recursive: true, force: true });
-            }
+            await rm(credential, { recursive: true, force: true });
           }
           conclusion = await recover(client, directory);
           if (!conclusion) throw new Error("QA run has no outcome");
           await rm(directory, { recursive: true });
-          if (credentialError) throw new Error(credentialError);
           if (conclusion.status === "failed")
             throw new Error(conclusion.summary);
           return `${input.url}/${input.board} (run ${record.id})`;
@@ -912,7 +818,6 @@ export const run = async (
     throw error;
   } finally {
     await cleanup();
-    if (input.runtime) await rm(guide, { recursive: true, force: true });
     process.removeListener("SIGINT", interrupted);
     process.removeListener("SIGTERM", interrupted);
     signal?.removeEventListener("abort", interrupted);

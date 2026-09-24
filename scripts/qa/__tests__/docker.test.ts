@@ -9,7 +9,7 @@ type Mount = {
   Destination: string;
   RW: boolean;
 };
-const state = (mounts: Mount[], anonymousAuth: boolean = false): unknown => ({
+const state = (mounts: Mount[], anonymous: boolean = false): unknown => ({
   Id: "controller",
   Image: `sha256:${"a".repeat(64)}`,
   Config: { Labels: {} },
@@ -17,9 +17,7 @@ const state = (mounts: Mount[], anonymousAuth: boolean = false): unknown => ({
     Mounts: mounts.map(
       (mount: Mount): Record<string, string> => ({
         Type: mount.Type,
-        ...(anonymousAuth && mount.Destination === "/auth"
-          ? {}
-          : { Source: mount.Name }),
+        ...(anonymous ? {} : { Source: mount.Name }),
         Target: mount.Destination,
       }),
     ),
@@ -34,30 +32,17 @@ const volume = (destination: string, writable: boolean = true): Mount => ({
   RW: writable,
 });
 
-test("real reviews require a persistent Codex login volume", () => {
-  const runtime: unknown = state([volume("/qa")]);
-  expect((): Docker.Runtime => Docker.runtime(runtime, true)).toThrow(
-    "writable named volume at /auth",
-  );
-  expect(Docker.runtime(runtime).directory).toBe("/qa");
+test("controller requires persistent state", () => {
+  expect(Docker.user(0, 0)).toEqual({ uid: 1000, gid: 1000 });
+  expect(Docker.user(501, 20)).toEqual({ uid: 501, gid: 20 });
+  expect(Docker.runtime(state([volume("/qa")])).directory).toBe("/qa");
   expect(
-    (): Docker.Runtime =>
-      Docker.runtime(state([volume("/qa"), volume("/auth", false)]), true),
-  ).toThrow("writable named volume at /auth");
+    (): Docker.Runtime => Docker.runtime(state([volume("/qa", false)])),
+  ).toThrow("writable named volume at /qa");
   expect(
-    (): Docker.Runtime =>
-      Docker.runtime(
-        state([volume("/qa"), { ...volume("/auth"), Name: "quaz-qa" }]),
-        true,
-      ),
-  ).toThrow("separate volumes");
-  expect(
-    (): Docker.Runtime =>
-      Docker.runtime(state([volume("/qa"), volume("/auth")], true), true),
-  ).toThrow("writable named volume at /auth");
-  expect(
-    Docker.runtime(state([volume("/qa"), volume("/auth")]), true).volume,
-  ).toBe("quaz-qa");
+    (): Docker.Runtime => Docker.runtime(state([volume("/qa")], true)),
+  ).toThrow("writable named volume at /qa");
+  expect(Docker.runtime(state([volume("/qa")])).volume).toBe("quaz-qa");
 });
 
 test("worker receives only run-scoped mounts and bridge access", () => {
@@ -84,9 +69,7 @@ test("worker receives only run-scoped mounts and bridge access", () => {
     project: "/config/project.json",
     url: "https://tracker.example",
     board: "owner/board",
-    skill: "/opt/impeccable",
-    auth: "/auth/auth.json",
-    provider: "codex",
+    provider: "claude",
     runtime: {
       image: `sha256:${"a".repeat(64)}`,
       revision: "a".repeat(64),
@@ -100,7 +83,6 @@ test("worker receives only run-scoped mounts and bridge access", () => {
     input,
     run,
     "/qa/temporary/qa-run",
-    "/qa/temporary/guide",
     "/qa/temporary/credential",
     "quaz:project",
     { url: "http://qa-controller:3000", token: "bridge-token" },
@@ -108,7 +90,7 @@ test("worker receives only run-scoped mounts and bridge access", () => {
   const mounts: string[] = args.filter((value: string): boolean =>
     value.startsWith("type="),
   );
-  expect(mounts).toHaveLength(4);
+  expect(mounts).toHaveLength(3);
   expect(
     mounts.every((value: string): boolean => value.includes("src=quaz-state")),
   ).toBe(true);
@@ -116,10 +98,8 @@ test("worker receives only run-scoped mounts and bridge access", () => {
     mounts.some((value: string): boolean => value.includes("dst=/credential")),
   ).toBe(true);
   expect(
-    mounts.some((value: string): boolean =>
-      value.includes("dst=/opt/impeccable,readonly"),
-    ),
-  ).toBe(true);
+    mounts.some((value: string): boolean => value.includes("impeccable")),
+  ).toBe(false);
   expect(args).toContain("QA_BRIDGE_TOKEN=bridge-token");
   expect(
     args.some((value: string): boolean =>
@@ -132,7 +112,6 @@ test("worker receives only run-scoped mounts and bridge access", () => {
     { ...input, mode: "smoke" },
     { ...run, mode: "smoke" },
     "/qa/temporary/qa-run",
-    "/qa/temporary/guide",
     "/qa/temporary/credential",
     "quaz:project",
     { url: "http://qa-controller:3000", token: "bridge-token" },

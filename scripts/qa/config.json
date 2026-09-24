@@ -1,7 +1,12 @@
 {
   "bun": "1.4.0",
   "node": "24.11.1",
-  "codex": "0.154.0",
+  "claude": "2.1.281",
+  "impeccable": "4.3.1",
+  "impeccableSha256": "1deea4cdfb1608df6d9e08ef359629e7cc866a22ab7c2195a835627b887f190b",
+  "impeccableEngine": "0.1.5",
+  "impeccableEngineArm64Sha256": "bc4fa28bc8ccbb018795a99a4ece95ada898a6f1885f14281389d0e6ef2a2f98",
+  "impeccableEngineX64Sha256": "cf5231a4b1ae66996c85b033800b1dad0797e590eae2f21ef2579430af187f19",
   "playwrightMcp": "0.0.82",
   "testers": 2,
   "maxTesters": 10,
@@ -15,7 +20,6 @@
     "attempts": 3,
     "directory": "/qa",
     "skill": "/opt/impeccable",
-    "auth": "/auth/auth.json",
     "label": "app.qa.controller"
   },
   "seconds": 1800,
@@ -24,10 +28,11 @@
   "cleanupSeconds": 10,
   "browserCalls": 60,
   "writingSeconds": 90,
-  "reasoningEffort": "low",
   "memory": "2g",
   "sharedMemory": "512m",
   "temporaryMemory": "1g",
   "processLimit": 512,
+  "workerUid": 1000,
+  "workerGid": 1000,
   "image": "quaz"
 }

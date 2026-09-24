@@ -47,7 +47,7 @@ export const schema = z
       .max(CONFIG.maxSeconds)
       .default(CONFIG.seconds),
     scenarios: z.array(z.string()).min(1).optional(),
-    provider: z.enum(["codex"]).default("codex"),
+    provider: z.enum(["claude"]).default("claude"),
     model: z.string().optional(),
     attention: z.string().optional(),
   })
@@ -158,32 +158,16 @@ export const plans = (
 export const recovery = async (
   client: Client.Client,
   directory: string,
-  input?: Runner.Options,
 ): Promise<void> => {
   const errors: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith("temporary-")) continue;
     const root: string = join(directory, entry.name);
     const children = await readdir(root, { withFileTypes: true });
-    const credentials: string[] = [];
     for (const child of children) {
       if (!child.isDirectory() || !child.name.startsWith("credential-"))
         continue;
       const path: string = join(root, child.name);
-      try {
-        if (
-          input &&
-          existsSync(`${path}.initial`) &&
-          existsSync(join(path, "auth.json"))
-        )
-          await Runner.restoreAuth(
-            input,
-            path,
-            await readFile(`${path}.initial`),
-          );
-      } catch (error: unknown) {
-        credentials.push(String(error));
-      }
       await rm(path, { recursive: true, force: true });
     }
     let pending: boolean = false;
@@ -192,13 +176,6 @@ export const recovery = async (
       if (!child.isDirectory() || !existsSync(join(path, "recovery.json")))
         continue;
       try {
-        if (credentials.length) {
-          await mkdir(join(path, "output"), { recursive: true });
-          await writeFile(
-            join(path, "output/credential-error.json"),
-            JSON.stringify({ errors: credentials }),
-          );
-        }
         await Runner.recover(client, path);
         await rm(path, { recursive: true });
       } catch (error: unknown) {
@@ -206,7 +183,6 @@ export const recovery = async (
         errors.push(String(error));
       }
     }
-    errors.push(...credentials);
     if (!pending) await rm(root, { recursive: true });
   }
   if (errors.length)
@@ -344,9 +320,7 @@ export const start = async (
   settings: Settings,
   signal: AbortSignal,
 ): Promise<void> => {
-  const runtime: Docker.Runtime = await Docker.inspect(
-    settings.mode !== "smoke",
-  );
+  const runtime: Docker.Runtime = await Docker.inspect();
   const token: string = trackerToken(process.env);
   await mkdir(runtime.directory, { recursive: true });
   const lock = await open(
@@ -369,10 +343,6 @@ export const start = async (
         "1",
         "--seconds",
         String(settings.seconds),
-        "--auth",
-        CONFIG.controller.auth,
-        "--skill",
-        CONFIG.controller.skill,
         ...(settings.scenarios
           ? ["--scenarios", settings.scenarios.join(",")]
           : []),
@@ -430,8 +400,7 @@ export const start = async (
           stopping,
         );
       },
-      recover: async (): Promise<void> =>
-        recovery(client, runtime.directory, input),
+      recover: async (): Promise<void> => recovery(client, runtime.directory),
       now: Date.now,
       wait,
       log,
