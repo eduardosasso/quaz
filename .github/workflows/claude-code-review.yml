@@ -1,0 +1,42 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude-review:
+    if: github.event_name == 'pull_request'
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: eduardosasso/claude-review/.github/workflows/review.yml@v1
+    with:
+      context: "This repository is a Bun and TypeScript QA runner (Playwright, Docker, bun:sqlite); tests live in src/__tests__ and scripts/qa/__tests__ and run with bun test."
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  claude:
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    uses: eduardosasso/claude-review/.github/workflows/mention.yml@v1
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
