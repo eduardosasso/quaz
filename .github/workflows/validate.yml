@@ -44,6 +44,9 @@ jobs:
       - name: Test
         run: bun run test
 
+      - name: Build Quaz image
+        run: bun --no-env-file -e 'import * as Image from "./scripts/qa/image.ts"; await Image.base()'
+
       - name: Check release tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -74,6 +77,11 @@ jobs:
           echo "docker=$(jq -r .docker "$config")" >> "$GITHUB_OUTPUT"
           echo "op=$(jq -r .op "$config")" >> "$GITHUB_OUTPUT"
           echo "claude=$(jq -r .claude "$config")" >> "$GITHUB_OUTPUT"
+          echo "impeccable=$(jq -r .impeccable "$config")" >> "$GITHUB_OUTPUT"
+          echo "impeccable_sha256=$(jq -r .impeccableSha256 "$config")" >> "$GITHUB_OUTPUT"
+          echo "impeccable_engine=$(jq -r .impeccableEngine "$config")" >> "$GITHUB_OUTPUT"
+          echo "impeccable_engine_arm64_sha256=$(jq -r .impeccableEngineArm64Sha256 "$config")" >> "$GITHUB_OUTPUT"
+          echo "impeccable_engine_x64_sha256=$(jq -r .impeccableEngineX64Sha256 "$config")" >> "$GITHUB_OUTPUT"
           echo "playwright_mcp=$(jq -r .playwrightMcp "$config")" >> "$GITHUB_OUTPUT"
           echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
 
@@ -99,6 +107,11 @@ jobs:
             DOCKER_VERSION=${{ steps.image.outputs.docker }}
             OP_VERSION=${{ steps.image.outputs.op }}
             CLAUDE_VERSION=${{ steps.image.outputs.claude }}
+            IMPECCABLE_VERSION=${{ steps.image.outputs.impeccable }}
+            IMPECCABLE_SHA256=${{ steps.image.outputs.impeccable_sha256 }}
+            IMPECCABLE_ENGINE_VERSION=${{ steps.image.outputs.impeccable_engine }}
+            IMPECCABLE_ENGINE_ARM64_SHA256=${{ steps.image.outputs.impeccable_engine_arm64_sha256 }}
+            IMPECCABLE_ENGINE_X64_SHA256=${{ steps.image.outputs.impeccable_engine_x64_sha256 }}
             PLAYWRIGHT_MCP_VERSION=${{ steps.image.outputs.playwright_mcp }}
             SOURCE_REVISION=${{ github.sha }}
             IMAGE_VERSION=${{ steps.image.outputs.version }}

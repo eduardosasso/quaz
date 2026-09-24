@@ -91,6 +91,21 @@ test("project image extends a pinned Quaz base", () => {
   );
 });
 
+test("release workflow supplies every base image build argument", () => {
+  const workflow: string = readFileSync(
+    join(import.meta.dir, "../../../.github/workflows/validate.yml"),
+    "utf8",
+  );
+  const args: string[] = Image.baseArgs("revision", "0.1.0");
+  const names: string[] = args
+    .filter((value: string): boolean => value.includes("="))
+    .map((value: string): string => value.split("=")[0] ?? "");
+  for (const name of names)
+    expect(workflow).toMatch(new RegExp(`^\\s+${name}=\\$\\{\\{`, "m"));
+  expect(workflow).toContain("- name: Build Quaz image");
+  expect(workflow).toContain("await Image.base()");
+});
+
 test("base image override needs an immutable digest", async () => {
   const before: string | undefined = process.env.QUAZ_BASE_IMAGE;
   try {
