@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import * as Protocol from "@/qa_protocol";
+import * as Record from "@/record";
 import type * as Tracker from "@/tracker";
 
 const MILLISECONDS: number = 1000;
@@ -157,8 +158,49 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
       ).run(Date.now(), Date.now() + Protocol.LEASE_SECONDS * MILLISECONDS, id);
       return run(id);
     })();
+  const records = async (
+    project: string,
+    cards: Tracker.Card[],
+  ): Promise<Map<number, Record.Record>> => {
+    const entries: (Record.Record | null)[] = await Promise.all(
+      cards.map(async (card): Promise<Record.Record | null> => {
+        const labels: Set<string> = tags(card.tags);
+        if (
+          card.status === DELETED ||
+          !labels.has(Protocol.TAG.issue) ||
+          !labels.has(`project:${project}`)
+        )
+          return null;
+
+        return Record.load(tracker, card.id);
+      }),
+    );
+    const found: Map<number, Record.Record> = new Map();
+    for (const entry of entries) {
+      if (!entry || entry.project !== project) continue;
+      found.set(entry.card, entry);
+      if (!entry.test) continue;
+      for (const fingerprint of entry.fingerprints)
+        db.query(
+          `INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result)
+           VALUES (?,?,?,?,?,?) ON CONFLICT(project,fingerprint) DO UPDATE SET
+           note_id=excluded.note_id,test=excluded.test,fix=excluded.fix,
+           last_result=excluded.last_result`,
+        ).run(
+          project,
+          fingerprint,
+          entry.card,
+          JSON.stringify(entry.test),
+          entry.fix,
+          entry.lastResult,
+        );
+    }
+
+    return found;
+  };
   const catalog = async (project: string): Promise<Protocol.Catalog> => {
     const cards: Tracker.Card[] = await tracker.list();
+    const saved: Map<number, Record.Record> = await records(project, cards);
     const known: Map<number, { project: string; fingerprints: string[] }> =
       new Map();
     for (const entry of db
@@ -197,7 +239,10 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
         tags: card.tags,
         status: card.status,
         comments: card.comments,
-        fingerprints: known.get(card.id)?.fingerprints ?? [],
+        fingerprints:
+          saved.get(card.id)?.fingerprints ??
+          known.get(card.id)?.fingerprints ??
+          [],
       }));
     if (
       new TextEncoder().encode(JSON.stringify(selected)).byteLength >
@@ -210,6 +255,7 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
     project: string,
     revision?: string,
   ): Promise<Protocol.State> => {
+    await records(project, await tracker.list());
     const now: number = Date.now();
     const expired: RunRow[] = db
       .query<RunRow, [string, number]>(
@@ -342,15 +388,31 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
   const fix = async (note: number, revision: string): Promise<void> => {
     if (!(await tracker.get(note))) throw new Error("QA card not found");
     const row = db
-      .query<{ fix: string | null }, [number]>(
-        "SELECT fix FROM qa_findings WHERE note_id=? ORDER BY rowid LIMIT 1",
+      .query<
+        {
+          fix: string | null;
+          project: string;
+          fingerprint: string;
+          test: string;
+        },
+        [number]
+      >(
+        "SELECT fix,project,fingerprint,test FROM qa_findings WHERE note_id=? ORDER BY rowid LIMIT 1",
       )
       .get(note);
     if (!row) throw new Error("QA card not found");
-    if (row.fix !== revision)
+    if (row.fix !== revision) {
+      await Record.save(tracker, note, {
+        project: row.project,
+        fingerprint: row.fingerprint,
+        test: Protocol.caseSchema.parse(JSON.parse(row.test)),
+        fix: revision,
+        lastResult: null,
+      });
       db.query(
         "UPDATE qa_findings SET fix=?,last_result=NULL WHERE note_id=?",
       ).run(revision, note);
+    }
   };
   const finding = (note: number): FindingRow | null =>
     db

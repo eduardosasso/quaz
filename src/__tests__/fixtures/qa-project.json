@@ -1,0 +1,8 @@
+{
+  "id": "sample-app",
+  "root": ".",
+  "sources": ["app.ts"],
+  "settings": {},
+  "scenarios": ["empty", "typical", "busy"],
+  "revision": "source"
+}

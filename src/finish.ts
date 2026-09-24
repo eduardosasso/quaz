@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as Protocol from "@/qa_protocol";
+import * as Record from "@/record";
 import type * as State from "@/state";
 import type * as Tracker from "@/tracker";
 
@@ -301,6 +302,15 @@ export const publish = async (
         if (input.verdict === "fail" || signature !== finding?.last_result) {
           const report: string = `QA ${input.verdict}\nRun: ${id}\n${proof ? `Deployed and tested revision: ${proof.tested}\n` : ""}${links(state, copied)}\n${input.summary}`;
           await comment(state, target.id, report, run.note_id);
+          await Record.save(state.tracker, target.id, {
+            project: run.project,
+            fingerprint: finding?.fingerprint,
+            test: finding
+              ? Protocol.caseSchema.parse(JSON.parse(finding.test))
+              : undefined,
+            fix: finding?.fix,
+            lastResult: signature,
+          });
           state.db
             .query("UPDATE qa_findings SET last_result=? WHERE note_id=?")
             .run(signature, target.id);
@@ -350,6 +360,13 @@ export const publish = async (
             target,
             finding.evidence,
           );
+          await Record.save(state.tracker, target, {
+            project: run.project,
+            fingerprint: finding.fingerprint,
+            test: finding.test,
+            fix: managed?.fix,
+            lastResult: managed?.last_result,
+          });
           state.db
             .query(
               "INSERT OR IGNORE INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
@@ -383,6 +400,12 @@ export const publish = async (
             await state.tracker.update(target, {
               tagsAdd: Protocol.TAG.pending,
               tagsRemove: `${Protocol.TAG.verified},${Protocol.TAG.attention}`,
+            });
+            await Record.save(state.tracker, target, {
+              project: run.project,
+              fingerprint: finding.fingerprint,
+              fix: null,
+              lastResult: null,
             });
             state.db
               .query(
@@ -419,6 +442,11 @@ export const publish = async (
         );
         await state.tracker.update(note.id, {
           description: `${description}\n\n${links(state, copied)}`,
+        });
+        await Record.save(state.tracker, note.id, {
+          project: run.project,
+          fingerprint: finding.fingerprint,
+          test: finding.test,
         });
         state.db
           .query(

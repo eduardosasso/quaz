@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Finish from "@/finish";
 import type * as Protocol from "@/qa_protocol";
+import * as Record from "@/record";
 import * as State from "@/state";
 import type * as Tracker from "@/tracker";
 
@@ -17,14 +18,19 @@ const fixture = (): {
   state: State.State;
   cards: Map<number, Tracker.Card>;
   comments: Map<number, string[]>;
-  files: Map<number, { name: string; bytes: Uint8Array; mime: string }>;
+  files: Map<
+    number,
+    { card: number; name: string; bytes: Uint8Array; mime: string }
+  >;
 } => {
   const folder: string = mkdtempSync(join(tmpdir(), "quaz-test-"));
   folders.push(folder);
   const cards: Map<number, Tracker.Card> = new Map();
   const comments: Map<number, string[]> = new Map();
-  const files: Map<number, { name: string; bytes: Uint8Array; mime: string }> =
-    new Map();
+  const files: Map<
+    number,
+    { card: number; name: string; bytes: Uint8Array; mime: string }
+  > = new Map();
   const keys: Map<string, number> = new Map();
   let next: number = 1;
   let fileId: number = 1;
@@ -95,19 +101,21 @@ const fixture = (): {
       comments.set(id, [...(comments.get(id) ?? []), body]);
     },
     upload: async (
-      _id: number,
+      card: number,
       path: string,
       bytes: Uint8Array,
       mime: string,
     ): Promise<Tracker.Attachment> => {
       const id: number = fileId++;
-      files.set(id, { name: path, bytes, mime });
+      files.set(id, { card, name: path, bytes, mime });
       return { id, name: path };
     },
-    attachments: async (_id: number): Promise<Tracker.Attachment[]> =>
-      [...files].map(
-        ([id, value]): Tracker.Attachment => ({ id, name: value.name }),
-      ),
+    attachments: async (card: number): Promise<Tracker.Attachment[]> =>
+      [...files]
+        .map(([id, value]): Tracker.Attachment | null =>
+          value.card === card ? { id, name: value.name } : null,
+        )
+        .filter((entry): entry is Tracker.Attachment => entry !== null),
     download: async (id: number): Promise<Uint8Array> => {
       const file = files.get(id);
       if (!file) throw new Error("Attachment missing");
@@ -210,10 +218,21 @@ test("discovery retries after a partial card write", async () => {
   expect(cards.size).toBe(2);
   expect(
     [...files.values()]
-      .filter((file): boolean => file.name.startsWith("quaz-"))
+      .filter(
+        (file): boolean =>
+          file.name.startsWith("quaz-") && file.mime === "text/plain",
+      )
       .map((file): string => file.mime),
   ).toEqual(["text/plain"]);
   expect(state.finding(first.created[0])?.fingerprint).toBe(issue.fingerprint);
+  await state.tracker.complete(first.created[0]);
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-published-"));
+  folders.push(folder);
+  const recovered: State.State = State.open(
+    join(folder, "state.db"),
+    state.tracker,
+  );
+  expect((await recovered.state("sample")).tickets[0].test).toEqual(issue.test);
 });
 
 test("failed verification reopens the card and records a comment", async () => {
@@ -419,6 +438,39 @@ test("matched card becomes a tracked issue", async () => {
   expect(
     (await state.state("sample")).tickets.map((ticket) => ticket.id),
   ).toEqual([issue.id]);
+});
+
+test("fresh database recovers a card test and fix from its files", async () => {
+  const { state } = fixture();
+  const issue: Tracker.Card = await state.tracker.create(
+    "Broken save",
+    { tags: "qa,needs-verification,project:sample" },
+    "issue",
+  );
+  await state.tracker.complete(issue.id);
+  const found: Protocol.Finding = finding(1);
+  await Record.save(state.tracker, issue.id, {
+    project: "sample",
+    fingerprint: found.fingerprint,
+    test: found.test,
+  });
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-recover-"));
+  folders.push(folder);
+  const recovered: State.State = State.open(
+    join(folder, "new.db"),
+    state.tracker,
+  );
+  expect((await recovered.catalog("sample")).cards[0].fingerprints).toEqual([
+    found.fingerprint,
+  ]);
+  expect((await recovered.state("sample")).tickets[0].test).toEqual(found.test);
+  await recovered.fix(issue.id, revision);
+  const again: State.State = State.open(
+    join(folder, "again.db"),
+    state.tracker,
+  );
+
+  expect((await again.state("sample")).tickets[0].fix).toBe(revision);
 });
 
 test("older discovery cannot reopen a newly verified issue", async () => {
