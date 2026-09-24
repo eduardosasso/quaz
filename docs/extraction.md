@@ -30,6 +30,7 @@ The current branch is a cutover candidate. The gaps below keep Overdew PR #208 i
 - Disposable Overdew empty, typical, and busy scenarios work, including authenticated browser use and evidence uploads.
 - Discovery, verification, blocked results, failure reopening, stale-result rejection, and retries keep the original cards and evidence.
 - One controller image runs workers without sharing the publishing token, Docker socket, or mutable app data.
+- Every run records separate app revision and Quaz runner provenance, including the target adapter and Dockerfile.
 - The latest Overdew main, Quaz tests, and an independent validator pass before cutover.
 
 No production migration or controller installation has run from this branch.
@@ -40,4 +41,4 @@ Quaz can test any app with a project config and a target adapter. The target ada
 
 The `Tracker` interface stores run and finding cards, comments, and evidence. `src/adapters/overdew.ts` translates that interface to Overdew's generic HTTP API. This adapter is independent of the tested app. The same Overdew board can track work from several projects through `project:*` labels and machine records. Overdew does not interpret Quaz modes or QA labels.
 
-The current local SQLite still owns run history, flow claims, publication leases, and successful-verification order. Card files now preserve new finding tests and fix revisions, but that is not sufficient for a fresh controller. Old cards have no machine record. These gaps block cutover.
+The current local SQLite still owns run history, flow claims, publication leases, and successful-verification order. Card files now preserve new finding tests and fix revisions, but that is not sufficient for a fresh controller. Old cards have no machine record. The app revision does not include the adapter or Dockerfile, so runner provenance needs a separate field. These gaps block cutover.

@@ -1,6 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, openSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import CONFIG from "@qa/config.json";
 import * as Coverage from "@qa/coverage";
@@ -213,6 +220,7 @@ export const instructions = async (input: {
   policy: string;
   skill: string;
   context: string[];
+  contextRoot?: string;
   scenario: string;
   fixture: Record<string, unknown>;
 }): Promise<Instructions> => {
@@ -257,11 +265,21 @@ export const instructions = async (input: {
       };
     }),
   );
+  const contextRoot: string = input.context.length
+    ? await realpath(input.contextRoot ?? APP)
+    : "";
   const context = await Promise.all(
-    input.context.map(async (path: string) => ({
-      path,
-      content: await readFile(path, "utf8"),
-    })),
+    input.context.map(async (path: string) => {
+      const resolved: string = await realpath(path);
+      if (!resolved.startsWith(`${contextRoot}/`))
+        throw new Error("Product context escapes the app directory");
+      if (resolved.startsWith(`${contextRoot}/uploads/`))
+        throw new Error("Product context cannot use writable app files");
+      if (!(await stat(resolved)).isFile())
+        throw new Error("Product context must be a file");
+
+      return { path, content: await readFile(resolved, "utf8") };
+    }),
   );
   const guidance: Record<string, unknown> = {
     mode: "mobile QA criteria, not full command execution",
@@ -301,6 +319,7 @@ const guidance = async (
     policy: "/quaz/scripts/qa/QA.md",
     skill: process.env.QA_SKILL_PATH ?? "/skill",
     context: PROJECT.context,
+    contextRoot: APP,
     scenario: options.scenario,
     fixture: fixture.metadata,
   });

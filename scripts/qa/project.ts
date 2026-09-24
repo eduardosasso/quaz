@@ -15,6 +15,18 @@ const loopback = z.url().refine((value: string): boolean => {
     !url.hash
   );
 });
+const contextPath = z.string().refine((value: string): boolean => {
+  if (!value.startsWith("/app/")) return false;
+
+  const relative: string = value.slice("/app/".length);
+  if (relative === "uploads" || relative.startsWith("uploads/")) return false;
+
+  return relative
+    .split("/")
+    .every(
+      (part: string): boolean => Boolean(part) && ![".", ".."].includes(part),
+    );
+}, "Context must stay inside /app");
 export const schema = z
   .object({
     id: z.string().regex(/^[a-z0-9][a-z0-9_-]+$/),
@@ -38,7 +50,7 @@ export const schema = z
       )
       .min(1),
     adapter: z.string().startsWith("/").default("/quaz/scripts/qa/command.ts"),
-    context: z.array(z.string().startsWith("/app/")).default([]),
+    context: z.array(contextPath).default([]),
     settings: z.record(z.string(), z.string()).default({}),
     scenarios: z.array(z.string().regex(/^[a-z0-9-]+$/)).min(1),
     revision: z.enum(["git", "source"]).default("git"),
@@ -52,7 +64,24 @@ export const schema = z
       })
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, issue): void => {
+    for (const path of value.context) {
+      const relative: string = path.slice("/app/".length);
+      if (
+        value.sources.some(
+          (source: string): boolean =>
+            relative === source || relative.startsWith(`${source}/`),
+        )
+      )
+        continue;
+      issue.addIssue({
+        code: "custom",
+        message: "Context must be included in staged project sources",
+        path: ["context"],
+      });
+    }
+  });
 export type Project = z.infer<typeof schema>;
 export type Prepared = {
   origin: string;

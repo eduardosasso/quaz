@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import CONFIG from "@qa/config.json";
+import * as Project from "@qa/project";
 import * as Review from "@qa/review";
 import * as Runner from "@qa/run";
 import * as Worker from "@qa/worker";
@@ -13,6 +14,36 @@ const options = (args: string[]): Runner.Options =>
   Runner.options(["--project", PROJECT_FILE, ...args]);
 
 describe("QA runner configuration", (): void => {
+  test("project context stays in staged app files", (): void => {
+    const project = {
+      id: "sample",
+      root: "/app",
+      sources: ["PRODUCT.md"],
+      scenarios: ["empty"],
+    };
+    expect(
+      Project.schema.safeParse({
+        ...project,
+        context: ["/app/PRODUCT.md"],
+      }).success,
+    ).toBe(true);
+    for (const path of [
+      "/app/../credential/auth.json",
+      "/app/PRODUCT.md/../../credential/auth.json",
+      "/app/secret.txt",
+    ])
+      expect(
+        Project.schema.safeParse({ ...project, context: [path] }).success,
+      ).toBe(false);
+    expect(
+      Project.schema.safeParse({
+        ...project,
+        sources: ["uploads"],
+        context: ["/app/uploads/brief.md"],
+      }).success,
+    ).toBe(false);
+  });
+
   test("empty data is available without fixtures", (): void => {
     expect(
       options(["--scenarios", "empty", "--testers", "2"]).scenarios,
@@ -115,6 +146,7 @@ describe("QA reviewer context", (): void => {
       policy: join(import.meta.dir, "../../scripts/qa/QA.md"),
       skill: directory,
       context: [join(directory, "DESIGN.md")],
+      contextRoot: directory,
       scenario,
       fixture: metadata,
     });
@@ -183,5 +215,46 @@ describe("QA reviewer context", (): void => {
       scenario: "reading-list",
       fixture: metadata,
     });
+  });
+
+  test("linked product context cannot escape the app", async (): Promise<void> => {
+    const outside: string = await mkdtemp(join(tmpdir(), "qa-outside-"));
+    try {
+      const file: string = join(outside, "private.txt");
+      await writeFile(file, "private fixture");
+      const link: string = join(directory, "outside.md");
+      await symlink(file, link);
+      await expect(
+        Worker.instructions({
+          policy: join(import.meta.dir, "../../scripts/qa/QA.md"),
+          skill: directory,
+          context: [link],
+          contextRoot: directory,
+          scenario: "empty",
+          fixture: {},
+        }),
+      ).rejects.toThrow("Product context escapes the app directory");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("linked product context cannot use writable app files", async (): Promise<void> => {
+    const uploads: string = join(directory, "uploads");
+    await mkdir(uploads, { recursive: true });
+    const file: string = join(uploads, "brief.md");
+    await writeFile(file, "writable fixture");
+    const link: string = join(directory, "writable.md");
+    await symlink(file, link);
+    await expect(
+      Worker.instructions({
+        policy: join(import.meta.dir, "../../scripts/qa/QA.md"),
+        skill: directory,
+        context: [link],
+        contextRoot: directory,
+        scenario: "empty",
+        fixture: {},
+      }),
+    ).rejects.toThrow("Product context cannot use writable app files");
   });
 });
