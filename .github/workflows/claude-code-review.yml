@@ -1,0 +1,23 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: eduardosasso/claude-review/.github/workflows/review.yml@v1
+    with:
+      context: "Quaz is a Bun and TypeScript QA runner. Review its generic project and Tracker boundaries, disposable target isolation, run recovery, and tests. A target app must not receive the Overdew tracker token."
+      allowed_bots: "overdew-app,merv-app,claude,github-actions"
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

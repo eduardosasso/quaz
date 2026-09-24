@@ -35,3 +35,13 @@ bun --no-env-file run test
 ```
 
 Quaz creates cards with an idempotency key. The tracker must replay a matching request and reject a changed request. This lets Quaz retry publication after an interrupted API call.
+
+## Reviews and image releases
+
+Pull requests run lint, type checks, tests, and the shared Claude Code Review workflow. Merv reads those checks and can review the pull request when its GitHub App and repository allowlist include Quaz. `.merv.json` defines the same checks for Merv. It has no ship command.
+
+On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:sha-<full-commit-sha>`. Main must require passing validation, Claude review, and Merv checks before this workflow is merged. The image records the full source SHA and package version in OCI labels. Publication does not start Quaz or install a QA schedule.
+
+Run the **Plan version** workflow on `main` to select a stable SemVer bump from merged commits. Claude chooses major, minor, or patch and gives one reason. The workflow accepts an explicit override. A missing or invalid model answer stops the plan. Apply that plan in a normal pull request, then create an explicit `vX.Y.Z` Git tag on its merged commit. The tag workflow publishes that version tag only when it matches `package.json` and points to a commit on `main`.
+
+The controller image does not bundle an app under test or a private review guide. A project image supplies the disposable app, and the guide is mounted when the controller runs. The extraction cutover gates remain in [draft PR #1](https://github.com/eduardosasso/quaz/pull/1).
