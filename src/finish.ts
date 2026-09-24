@@ -10,6 +10,8 @@ const COMMENT_MAX: number = 4000;
 const MILLISECONDS: number = 1000;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const commentDigest = (value: string): string =>
+  digest(value.replace(/\r\n?/g, "\n"));
 const tags = (value: string): Set<string> =>
   new Set(
     value
@@ -106,9 +108,13 @@ const comment = async (
       : body;
   const target: Tracker.Card | null = await state.tracker.get(note);
   if (!target) throw new Error("QA comment card is unavailable");
-  if (!target.comments.includes(text)) {
+  if (
+    !target.comments.some(
+      (body): boolean => commentDigest(body) === commentDigest(text),
+    )
+  ) {
     if (apply)
-      await apply(`comment:${digest(text)}`, async (): Promise<void> => {
+      await apply(`comment:${commentDigest(text)}`, async (): Promise<void> => {
         await state.tracker.comment(note, text);
       });
     else await state.tracker.comment(note, text);
@@ -125,7 +131,7 @@ const actionMatches = async (
     );
   if (step.startsWith("comment:"))
     return card.comments.some(
-      (body): boolean => digest(body) === step.slice("comment:".length),
+      (body): boolean => commentDigest(body) === step.slice("comment:".length),
     );
   const labels: Set<string> = tags(card.tags);
   if (step === "pass")

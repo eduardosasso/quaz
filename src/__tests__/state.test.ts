@@ -823,6 +823,73 @@ test("verification retry rejects an externally edited card", async () => {
   expect(comments.get(issue.id)).toHaveLength(priorComments);
 });
 
+test("verification accepts tracker comment line endings", async () => {
+  const { state, cards, comments } = fixture();
+  const created: Tracker.Card = await state.tracker.create(
+    "Broken save",
+    "issue",
+  );
+  const issue: Tracker.Card = await state.tracker.update(created.id, {
+    tags: "qa,needs-verification,project:sample",
+  });
+  cards.set(issue.id, { ...issue, status: 1 });
+  state.db
+    .query(
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
+    )
+    .run(
+      "sample",
+      "c".repeat(64),
+      issue.id,
+      JSON.stringify({
+        flow: "save-draft",
+        route: "/",
+        steps: ["Save"],
+        expected: "Saved",
+        scenario: "empty",
+      }),
+    );
+  const run: Protocol.Run = await state.begin(begin("verify"));
+  state.ready(run.id);
+  await state.claim(run.id, `ticket-${issue.id}`, "Saved", issue.id);
+  const comment: Tracker.Tracker["comment"] = state.tracker.comment;
+  let interrupted: boolean = false;
+  state.tracker.comment = async (id: number, body: string): Promise<void> => {
+    await comment(id, body.replace(/\n/g, "\r\n"));
+    if (!interrupted) {
+      interrupted = true;
+      throw new Error("Stopped after comment");
+    }
+  };
+  const result: Protocol.Finish = {
+    status: "partial",
+    summary: "Needs another check",
+    report: {},
+    findings: [],
+    evidence: [],
+    verdict: "blocked",
+    deployment: null,
+  };
+  await expect(Finish.publish(state, run.id, result)).rejects.toThrow(
+    "Stopped after comment",
+  );
+  const published: Finish.Result = await Finish.publish(state, run.id, result);
+  expect(published.cards).toEqual([issue.id]);
+  expect(comments.get(issue.id)).toHaveLength(1);
+  expect((await Finish.publish(state, run.id, result)).replayed).toBe(true);
+  expect(comments.get(issue.id)).toHaveLength(1);
+
+  const next: Protocol.Run = await state.begin(begin("verify"));
+  state.ready(next.id);
+  await state.claim(next.id, `ticket-${issue.id}`, "Saved", issue.id);
+  const second: Finish.Result = await Finish.publish(state, next.id, {
+    ...result,
+    summary: "Needs a third check",
+  });
+  expect(second.cards).toEqual([issue.id]);
+  expect(comments.get(issue.id)).toHaveLength(2);
+});
+
 test("same-run findings retain both fingerprints", async () => {
   const { state } = fixture();
   const run = await state.begin(begin("discover"));
