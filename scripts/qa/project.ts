@@ -80,7 +80,13 @@ export type Adapter = {
 };
 export const load = (file: string): Project => {
   const value: Project = schema.parse(JSON.parse(readFileSync(file, "utf8")));
-  return { ...value, root: resolve(dirname(file), value.root) };
+  return {
+    ...value,
+    root: resolve(dirname(file), value.root),
+    dockerfile: value.dockerfile
+      ? resolve(dirname(file), value.dockerfile)
+      : "",
+  };
 };
 export const validate = (value: Prepared): Prepared => {
   loopback.parse(value.origin);

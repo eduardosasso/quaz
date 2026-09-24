@@ -1,0 +1,6 @@
+{
+  "project": "/quaz/examples/overdew/project.container.json",
+  "mode": "auto",
+  "parallel": 2,
+  "intervalSeconds": 300
+}

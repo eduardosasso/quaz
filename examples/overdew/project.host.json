@@ -1,0 +1,20 @@
+{
+  "id": "overdew",
+  "root": "../../../overdew",
+  "dockerfile": "Dockerfile",
+  "sources": [
+    "package.json",
+    "bun.lock",
+    "tsconfig.json",
+    "vite.config.ts",
+    "index.tsx",
+    "PRODUCT.md",
+    "DESIGN.md",
+    "src",
+    "www"
+  ],
+  "adapter": "/quaz/examples/overdew/adapter.ts",
+  "context": ["/app/PRODUCT.md", "/app/DESIGN.md"],
+  "scenarios": ["empty", "typical", "busy"],
+  "revision": "source"
+}

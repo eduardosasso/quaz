@@ -1,0 +1,23 @@
+{
+  "id": "overdew",
+  "root": "/app",
+  "sources": [
+    "package.json",
+    "bun.lock",
+    "tsconfig.json",
+    "vite.config.ts",
+    "index.tsx",
+    "PRODUCT.md",
+    "DESIGN.md",
+    "src",
+    "www"
+  ],
+  "adapter": "/quaz/examples/overdew/adapter.ts",
+  "context": ["/app/PRODUCT.md", "/app/DESIGN.md"],
+  "scenarios": ["empty", "typical", "busy"],
+  "revision": "git",
+  "deployment": {
+    "url": "https://overdew.app/api/version",
+    "repository": "tedstonne/overdew"
+  }
+}
