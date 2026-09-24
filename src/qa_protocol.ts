@@ -12,7 +12,7 @@ export const REQUEST_MS: number = 30_000;
 export const LEASE_SECONDS: number = 3600;
 export const SCHEDULE_HISTORY: number = 10;
 export const CATALOG_BYTES: number = 256 * 1024;
-export const PUBLICATION_SECONDS: number = 180;
+export const PUBLICATION_SECONDS: number = 600;
 export const MATCHING_POLL_MS: number = 1000;
 export const decision = z
   .object({

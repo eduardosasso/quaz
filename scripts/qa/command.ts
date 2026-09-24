@@ -9,8 +9,9 @@ const settings = z
   .object({
     command: z
       .string()
+      .optional()
       .transform((value): string[] =>
-        z.array(z.string()).min(1).parse(JSON.parse(value)),
+        value ? z.array(z.string()).min(1).parse(JSON.parse(value)) : [],
       ),
     setup: z
       .string()

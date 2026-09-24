@@ -23,6 +23,10 @@ const duration = z.number().int().positive();
 export const schema = z
   .object({
     project: z.string(),
+    tracker: z
+      .object({ url: z.url(), board: z.string().min(3) })
+      .strict()
+      .optional(),
     mode: z.enum(["auto", "discover", "verify", "smoke"]).default("auto"),
     parallel: z
       .number()
@@ -176,8 +180,10 @@ export const recovery = async (
       if (!child.isDirectory() || !existsSync(join(path, "recovery.json")))
         continue;
       try {
-        await Runner.recover(client, path);
-        await rm(path, { recursive: true });
+        const conclusion: Protocol.Finish = await Runner.recover(client, path);
+        if (conclusion.status === "complete")
+          await rm(path, { recursive: true });
+        else pending = true;
       } catch (error: unknown) {
         pending = true;
         errors.push(String(error));
@@ -343,6 +349,14 @@ export const start = async (
         "1",
         "--seconds",
         String(settings.seconds),
+        ...(settings.tracker
+          ? [
+              "--tracker",
+              settings.tracker.url,
+              "--board",
+              settings.tracker.board,
+            ]
+          : []),
         ...(settings.scenarios
           ? ["--scenarios", settings.scenarios.join(",")]
           : []),
@@ -366,10 +380,10 @@ export const start = async (
         "Use a separate runtime volume for another tracking board or project",
       );
     await writeFile(path, destination, { mode: 0o600 });
-    const revision: string = await Runner.revision(project, runtime);
     await Docker.cleanup(runtime);
     await Docker.network(runtime);
     connected = true;
+    const revision: string = await Runner.revision(project, runtime);
     const log = (event: Record<string, unknown>): void =>
       console.log(JSON.stringify(event));
     log({
@@ -409,13 +423,7 @@ export const start = async (
     try {
       if (connected) {
         await Docker.cleanup(runtime);
-        await Docker.command([
-          "network",
-          "disconnect",
-          runtime.network,
-          process.env.HOSTNAME ?? "",
-        ]);
-        await Docker.command(["network", "rm", runtime.network]);
+        await Docker.release(runtime);
       }
     } finally {
       await lock.close();

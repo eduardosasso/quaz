@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { Browser, BrowserContext } from "playwright";
 import { z } from "zod";
+import * as Protocol from "@/qa_protocol";
 
-const loopback = z.url().refine((value: string): boolean => {
+const origin = z.url().refine((value: string): boolean => {
   const url: URL = new URL(value);
   return (
-    url.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+    ["https:", "http:"].includes(url.protocol) &&
     url.pathname === "/" &&
     !url.username &&
     !url.password &&
@@ -18,7 +18,7 @@ const loopback = z.url().refine((value: string): boolean => {
 export const schema = z
   .object({
     id: z.string().regex(/^[a-z0-9][a-z0-9_-]+$/),
-    root: z.string(),
+    root: z.string().default("."),
     dockerfile: z.string().default(""),
     sources: z
       .array(
@@ -36,12 +36,12 @@ export const schema = z
             "Sources must stay inside the project root",
           ),
       )
-      .min(1),
+      .default([]),
     adapter: z.string().startsWith("/").default("/quaz/scripts/qa/command.ts"),
     context: z.array(z.string().startsWith("/app/")).default([]),
     settings: z.record(z.string(), z.string()).default({}),
     scenarios: z.array(z.string().regex(/^[a-z0-9-]+$/)).min(1),
-    revision: z.enum(["git", "source"]).default("git"),
+    revision: z.enum(["git", "source", "target"]).default("git"),
     deployment: z
       .object({
         url: z.url(),
@@ -49,10 +49,21 @@ export const schema = z
           .string()
           .regex(/^[\w.-]+\/[\w.-]+$/)
           .optional(),
+        revision: z
+          .string()
+          .regex(/^[a-f0-9]{40,64}$/)
+          .optional(),
       })
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (project): boolean =>
+      project.revision === "target"
+        ? Boolean(project.deployment?.revision) && project.sources.length === 0
+        : project.sources.length > 0,
+    "Local targets need app sources; remote targets need a deployed revision",
+  );
 export type Project = z.infer<typeof schema>;
 export type Prepared = {
   origin: string;
@@ -82,13 +93,41 @@ export const load = (file: string): Project => {
   const value: Project = schema.parse(JSON.parse(readFileSync(file, "utf8")));
   return { ...value, root: resolve(dirname(file), value.root) };
 };
-export const validate = (value: Prepared): Prepared => {
-  loopback.parse(value.origin);
-  if (
-    !value.entry.startsWith("/") ||
-    !value.ready.startsWith("/") ||
-    !value.command.length
-  )
+export const validate = (value: Prepared, project: Project): Prepared => {
+  origin.parse(value.origin);
+  if (!value.entry.startsWith("/") || !value.ready.startsWith("/"))
     throw new Error("Invalid project adapter result");
-  return value;
+
+  const normalized: string = new URL(value.origin).origin;
+  if (
+    project.revision === "target" &&
+    (!project.deployment ||
+      normalized !== new URL(project.deployment.url).origin)
+  )
+    throw new Error("Project adapter origin differs from target deployment");
+
+  return { ...value, origin: normalized };
+};
+
+export const checkTarget = async (
+  project: Project,
+  request: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response> = fetch,
+): Promise<string> => {
+  if (project.revision !== "target" || !project.deployment?.revision)
+    throw new Error("Project has no deployed target revision");
+  const response: Response = await request(project.deployment.url, {
+    method: "HEAD",
+    redirect: "error",
+    signal: AbortSignal.timeout(Protocol.REQUEST_MS),
+  });
+  if (
+    !response.ok ||
+    response.headers.get("x-quaz-revision") !== project.deployment.revision
+  )
+    throw new Error("Target deployment revision does not match project config");
+
+  return project.deployment.revision;
 };

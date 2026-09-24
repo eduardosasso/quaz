@@ -171,3 +171,38 @@ export const network = async (value: Runtime): Promise<void> => {
       self,
     ]);
 };
+export const connected = (value: unknown): number => {
+  const parsed = z
+    .array(
+      z.object({
+        Containers: z.record(z.string(), z.unknown()).nullable(),
+      }),
+    )
+    .min(1)
+    .parse(value);
+
+  return Object.keys(parsed[0].Containers ?? {}).length;
+};
+export const release = async (value: Runtime): Promise<void> => {
+  await command([
+    "network",
+    "disconnect",
+    value.network,
+    process.env.HOSTNAME ?? "",
+  ]);
+  const remaining: number = connected(
+    JSON.parse(await command(["network", "inspect", value.network])),
+  );
+  if (remaining) {
+    console.log(
+      JSON.stringify({
+        event: "network-retained",
+        network: value.network,
+        reason: "target-containers-attached",
+        remaining,
+      }),
+    );
+    return;
+  }
+  await command(["network", "rm", value.network]);
+};

@@ -1,14 +1,13 @@
 ARG BUN_VERSION
-ARG NODE_VERSION
 ARG DOCKER_VERSION
 FROM docker:${DOCKER_VERSION}-cli AS docker
 FROM oven/bun:${BUN_VERSION} AS bun
-FROM node:${NODE_VERSION}-bookworm-slim
+FROM debian:bookworm-slim
 
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium ca-certificates curl unzip git gh fonts-noto-color-emoji \
+ && apt-get install -y --no-install-recommends chromium bubblewrap socat ca-certificates curl unzip git gh fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/*
 
 ARG OP_VERSION
@@ -65,6 +64,8 @@ RUN bun install --frozen-lockfile --production
 COPY src ./src
 COPY scripts ./scripts
 COPY examples ./examples
+RUN bun --no-env-file -e 'import("./scripts/qa/inspect.ts").then((module) => { if (typeof module.inspect !== "function") process.exit(1) })'
+RUN mkdir -p /app/uploads
 
 ARG SOURCE_REVISION
 ARG IMAGE_VERSION

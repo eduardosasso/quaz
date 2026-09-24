@@ -71,7 +71,6 @@ jobs:
         run: |
           config=scripts/qa/config.json
           echo "bun=$(jq -r .bun "$config")" >> "$GITHUB_OUTPUT"
-          echo "node=$(jq -r .node "$config")" >> "$GITHUB_OUTPUT"
           echo "docker=$(jq -r .docker "$config")" >> "$GITHUB_OUTPUT"
           echo "op=$(jq -r .op "$config")" >> "$GITHUB_OUTPUT"
           echo "claude=$(jq -r .claude "$config")" >> "$GITHUB_OUTPUT"
@@ -97,7 +96,6 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
           build-args: |
             BUN_VERSION=${{ steps.image.outputs.bun }}
-            NODE_VERSION=${{ steps.image.outputs.node }}
             DOCKER_VERSION=${{ steps.image.outputs.docker }}
             OP_VERSION=${{ steps.image.outputs.op }}
             CLAUDE_VERSION=${{ steps.image.outputs.claude }}

@@ -141,7 +141,13 @@ const command = async (args: string[], cwd: string): Promise<string> => {
 export const revision = async (
   project: Project.Project,
   runtime?: Docker.Runtime,
+  request: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response> = fetch,
 ): Promise<string> => {
+  if (project.revision === "target")
+    return Project.checkTarget(project, request);
   if (project.revision === "source") {
     const current: string = source(project);
     if (runtime && runtime.revision !== current)
@@ -322,6 +328,25 @@ export const recover = async (
       };
     await journal(directory, JSON.stringify({ ...stored, finish: conclusion }));
   }
+  if (!original.receipt && stored.project?.revision === "target") {
+    try {
+      await Project.checkTarget(stored.project);
+    } catch (error: unknown) {
+      conclusion = {
+        ...conclusion,
+        status: "partial",
+        verdict: original.mode === "verify" ? "waiting" : "none",
+        summary: `Target deployment changed or became unavailable before publication: ${String(error)}`,
+        findings: [],
+        matching: undefined,
+        deployment: null,
+      };
+      await journal(
+        directory,
+        JSON.stringify({ ...stored, finish: conclusion }),
+      );
+    }
+  }
   if (
     !original.receipt &&
     original.mode === "verify" &&
@@ -399,7 +424,11 @@ export const run = async (
     const stored = recoverySchema.parse(
       JSON.parse(await readFile(join(input.resume, "recovery.json"), "utf8")),
     );
-    await recover(client, input.resume);
+    const conclusion: Protocol.Finish = await recover(client, input.resume);
+    if (conclusion.status !== "complete")
+      throw new Error(
+        `QA resume remains ${conclusion.status}: ${conclusion.summary}. Evidence: ${input.resume}`,
+      );
     await rm(input.resume, { recursive: true });
     return [`${input.url}/${input.board} (run ${stored.run.id})`];
   }
@@ -414,7 +443,10 @@ export const run = async (
   const records: Protocol.Run[] = [];
   const attempts: string[] = [];
   const image: string =
-    input.runtime?.image ?? `${CONFIG.image}:${fingerprint.slice(0, 16)}`;
+    input.runtime?.image ??
+    (project.revision === "target"
+      ? await Image.base()
+      : `${CONFIG.image}:${fingerprint.slice(0, 16)}`);
   const names: Set<string> = new Set();
   const endpoints: Map<string, { run: Protocol.Run }> = new Map();
   const bridge = Bun.serve({
@@ -535,7 +567,7 @@ export const run = async (
       ["docker", "info", "--format", "{{.ServerVersion}}"],
       project.root,
     );
-    if (!input.runtime) {
+    if (!input.runtime && project.revision !== "target") {
       console.log(`Preparing ${project.id} QA image`);
       active();
       const base: string = await Image.base();
@@ -767,9 +799,9 @@ export const run = async (
           }
           conclusion = await recover(client, directory);
           if (!conclusion) throw new Error("QA run has no outcome");
-          await rm(directory, { recursive: true });
           if (conclusion.status === "failed")
             throw new Error(conclusion.summary);
+          await rm(directory, { recursive: true });
           return `${input.url}/${input.board} (run ${record.id})`;
         },
       ),
@@ -807,8 +839,9 @@ export const run = async (
               join(scratch, name),
               join(directory, "output", name),
             );
-        await recover(client, directory);
-        await rm(directory, { recursive: true });
+        const conclusion: Protocol.Finish = await recover(client, directory);
+        if (conclusion.status !== "failed")
+          await rm(directory, { recursive: true });
       } catch (recoveryError: unknown) {
         console.error(
           `QA publication needs --resume ${directory}: ${String(recoveryError)}`,

@@ -153,19 +153,49 @@ export const argumentsFor = (input: Input, schema: string): string[] => [
   "",
   "--no-session-persistence",
   "--permission-mode",
-  "bypassPermissions",
+  "dontAsk",
+  "--allowedTools",
+  input.browser.length ? "mcp__mobile__* mcp__coverage__*" : "",
   "--output-format",
   "stream-json",
   "--verbose",
   "--json-schema",
   schema,
   "--tools",
-  input.browser.length ? "Bash,Read,Skill" : "",
+  "",
   ...input.browser,
   ...(input.model ? ["--model", input.model] : []),
 ];
+export const schema = (value: z.ZodType): string => {
+  const output = z.toJSONSchema(value);
+  delete output.$schema;
+
+  return JSON.stringify(output);
+};
 export const redacted = (value: string, token: string): string =>
   token ? value.replaceAll(token, "[REDACTED]") : value;
+export const failure = (stderr: string): string => {
+  const reasons: Array<[RegExp, string]> = [
+    [/sandbox|bubblewrap|bwrap/i, "Claude sandbox failed"],
+    [
+      /mcp.{0,60}(failed|error)|failed.{0,60}mcp/i,
+      "Claude browser failed to start",
+    ],
+    [/permission denied|EACCES/i, "Claude cannot access a required file"],
+    [/json.schema|structured.output/i, "Claude rejected the output schema"],
+    [
+      /authentication|not logged in|unauthorized/i,
+      "Claude authentication failed",
+    ],
+    [/rate.limit|usage.limit/i, "Claude reached its usage limit"],
+  ];
+
+  return (
+    reasons.find(([pattern]: [RegExp, string]): boolean =>
+      pattern.test(stderr),
+    )?.[1] ?? "Claude exited without a classified error"
+  );
+};
 export const scrub = async (path: string, token: string): Promise<void> => {
   const value: string = await readFile(path, "utf8");
   const safe: string = redacted(value, token);

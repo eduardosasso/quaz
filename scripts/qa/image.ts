@@ -48,7 +48,6 @@ export const baseArgs = (revision: string, version: string): string[] => [
   join(ROOT, "Dockerfile.release"),
   ...Object.entries({
     BUN_VERSION: CONFIG.bun,
-    NODE_VERSION: CONFIG.node,
     CLAUDE_VERSION: CONFIG.claude,
     IMPECCABLE_VERSION: CONFIG.impeccable,
     IMPECCABLE_SHA256: CONFIG.impeccableSha256,

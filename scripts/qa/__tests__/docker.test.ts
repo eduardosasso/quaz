@@ -45,6 +45,13 @@ test("controller requires persistent state", () => {
   expect(Docker.runtime(state([volume("/qa")])).volume).toBe("quaz-qa");
 });
 
+test("controller keeps a network with attached target containers", () => {
+  expect(Docker.connected([{ Containers: null }])).toBe(0);
+  expect(Docker.connected([{ Containers: { target: { Name: "app" } } }])).toBe(
+    1,
+  );
+});
+
 test("worker receives only run-scoped mounts and bridge access", () => {
   const run: Protocol.Run = {
     id: "qa-run",

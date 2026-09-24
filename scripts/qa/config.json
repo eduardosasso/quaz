@@ -1,6 +1,5 @@
 {
   "bun": "1.4.0",
-  "node": "24.11.1",
   "claude": "2.1.281",
   "impeccable": "4.3.1",
   "impeccableSha256": "1deea4cdfb1608df6d9e08ef359629e7cc866a22ab7c2195a835627b887f190b",

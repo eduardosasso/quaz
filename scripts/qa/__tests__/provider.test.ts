@@ -3,6 +3,7 @@ import { mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Provider from "@qa/provider";
+import { z } from "zod";
 
 const input: Provider.Input = {
   work: "/output",
@@ -21,8 +22,16 @@ test("Claude runs with a schema and only the requested browser", () => {
   expect(args).toContain("stream-json");
   expect(args).toContain('{"type":"object"}');
   expect(args).toContain("--strict-mcp-config");
-  expect(args).toContain("Bash,Read,Skill");
-  expect(Provider.argumentsFor({ ...input, browser: [] }, "{}")).toContain("");
+  expect(args[args.indexOf("--allowedTools") + 1]).toBe(
+    "mcp__mobile__* mcp__coverage__*",
+  );
+  expect(args[args.indexOf("--tools") + 1]).toBe("");
+  expect(args).not.toContain("Bash,Read,Skill");
+  expect(
+    Provider.argumentsFor({ ...input, browser: [] }, "{}")[
+      args.indexOf("--allowedTools") + 1
+    ],
+  ).toBe("");
 });
 
 test("Claude browser evidence becomes checked QA events", () => {
@@ -111,6 +120,23 @@ test("Claude logs redact the QA token", () => {
   expect(Provider.redacted("before test-token after", "test-token")).toBe(
     "before [REDACTED] after",
   );
+});
+
+test("Claude failure logs expose only a fixed diagnosis", () => {
+  expect(Provider.failure("MCP server failed; secret=private")).toBe(
+    "Claude browser failed to start",
+  );
+  expect(Provider.failure("unexpected secret=private")).toBe(
+    "Claude exited without a classified error",
+  );
+});
+
+test("Claude receives a schema without the unsupported draft marker", () => {
+  const output: Record<string, unknown> = JSON.parse(
+    Provider.schema(z.object({ status: z.string() })),
+  );
+  expect(output.$schema).toBeUndefined();
+  expect(output.type).toBe("object");
 });
 
 test("Claude scrubs credentials from tool subprocesses", () => {

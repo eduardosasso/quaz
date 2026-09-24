@@ -35,6 +35,35 @@ test("image context copies only declared sources", async () => {
   ).toThrow();
 });
 
+test("project adapter origin has no trailing slash", () => {
+  const project: Project.Project = Project.schema.parse({
+    id: "sample",
+    revision: "target",
+    deployment: {
+      url: "http://qa-target:3000/version",
+      revision: "a".repeat(64),
+    },
+    scenarios: ["home"],
+  });
+  const prepared: Project.Prepared = {
+    origin: "http://qa-target:3000/",
+    entry: "/",
+    ready: "/",
+    storageState: { cookies: [], origins: [] },
+    command: [],
+    env: {},
+    metadata: {},
+  };
+
+  expect(Project.validate(prepared, project).origin).toBe(
+    "http://qa-target:3000",
+  );
+  expect(
+    (): Project.Prepared =>
+      Project.validate({ ...prepared, origin: "http://other:3000" }, project),
+  ).toThrow("differs from target deployment");
+});
+
 test("project image extends a pinned Quaz base", () => {
   const project: Project.Project = Project.schema.parse({
     id: "sample",
@@ -116,4 +145,34 @@ test("controller rejects a project image built from older source", async () => {
       owner: "controller",
     }),
   ).rejects.toThrow("rebuild the project image");
+});
+
+test("remote target uses the deployed revision with one Quaz image", async () => {
+  const revision: string = "d".repeat(64);
+  const url: string = "https://target.example/version";
+  const requests: string[] = [];
+  const request = async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    requests.push(`${init?.method}:${String(input)}`);
+
+    return new Response(null, { headers: { "x-quaz-revision": revision } });
+  };
+  const project: Project.Project = Project.schema.parse({
+    id: "remote",
+    scenarios: ["home"],
+    revision: "target",
+    deployment: { url, revision },
+  });
+  expect(project.sources).toEqual([]);
+  expect(await Runner.revision(project, undefined, request)).toBe(revision);
+  expect(requests).toEqual([`HEAD:${url}`]);
+  await expect(
+    Runner.revision(
+      { ...project, deployment: { url, revision: "e".repeat(64) } },
+      undefined,
+      request,
+    ),
+  ).rejects.toThrow("does not match");
 });

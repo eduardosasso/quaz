@@ -29,6 +29,7 @@ const OUTPUT: string = "/output";
 const APP: string = "/app";
 const WORK: string = OUTPUT;
 const AUTH: string = "/tmp/browser-state.json";
+const BRIDGE: string = "/tmp/qa-bridge.json";
 const CHROMIUM: string = "/usr/bin/chromium";
 const MCP: string = "/tools/node_modules/@playwright/mcp/cli.js";
 const MILLISECONDS: number = 1000;
@@ -127,10 +128,10 @@ const completion = (child: ChildProcess, seconds: number): Promise<number> =>
     });
   });
 
-const ready = async (child: ChildProcess): Promise<void> => {
+const ready = async (child?: ChildProcess): Promise<void> => {
   const deadline: number = Date.now() + BOOT_SECONDS * MILLISECONDS;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null)
+    if (child && child.exitCode !== null)
       throw new Error("Disposable app exited before readiness");
     try {
       const response: Response = await fetch(`${ORIGIN}${READY}`, {
@@ -148,6 +149,7 @@ const ready = async (child: ChildProcess): Promise<void> => {
 
 const mcp = (phase: Phase): string[] => {
   const args: string[] = [
+    "--no-env-file",
     MCP,
     "--headless",
     "--no-sandbox",
@@ -183,7 +185,19 @@ const mcp = (phase: Phase): string[] => {
   return [
     "--strict-mcp-config",
     "--mcp-config",
-    JSON.stringify({ mcpServers: { mobile: { command: "node", args } } }),
+    JSON.stringify({
+      mcpServers: {
+        mobile: { command: "bun", args },
+        ...(phase === "reviewer"
+          ? {
+              coverage: {
+                command: "bun",
+                args: ["--no-env-file", "/quaz/scripts/qa/coverage-mcp.ts"],
+              },
+            }
+          : {}),
+      },
+    }),
   ];
 };
 
@@ -324,14 +338,12 @@ const phase = async (
   const schemaPath: string = join(WORK, `${name}-schema.json`);
   await writeFile(
     schemaPath,
-    JSON.stringify(
-      z.toJSONSchema(
-        options.mode === "verify"
-          ? Review.verificationSchema
-          : name === "validator"
-            ? Review.validationSchema
-            : Review.assessmentSchema,
-      ),
+    Provider.schema(
+      options.mode === "verify"
+        ? Review.verificationSchema
+        : name === "validator"
+          ? Review.validationSchema
+          : Review.assessmentSchema,
     ),
   );
   const seconds: number = Math.floor((deadline - Date.now()) / MILLISECONDS);
@@ -344,8 +356,17 @@ const phase = async (
     options.mode === "verify"
       ? "MODE: verify. These instructions take precedence over discovery and review instructions above. Retest only the saved acceptance criteria and their necessary setup. Do not run the discovery ledger or six-guide review again. Inject failures, change screen sizes, or inspect source only when the saved criteria require them. Return when every supplied criterion and its evidence are checked. Do not expand the task after reproducing the outcome."
       : "MODE: discover. Test narrow, landscape, wide and text scaling within the selected flow. Complete every required check; do not stop after the happy path. The validator independently reproduces candidates, then audits the remaining check evidence.";
-  const instruction: string = `${policy}\nROLE: ${name}. Scenario: ${options.scenario}.\nApp: ${ORIGIN}${ENTRY}. Browser: start at 390x844. Output folder: /output/${name}.\n${scope}\n${assignment}\nTIME: ${seconds} seconds remain. Check date -u +%s before exploration. Finish browser work and evidence audits at Unix ${exploration}; reserve the remaining time for final JSON. Return final JSON by Unix ${Math.floor(deadline / MILLISECONDS)}. Use at most ${CONFIG.browserCalls} browser calls. Batch related interactions with the browser code tool. Missing evidence stays blocked and keeps the review incomplete.\nTake screenshots without a filename, inspect the inline image, and retain its returned relative path. Return JSON directly; do not write duplicate report files.`;
+  const instruction: string = `${policy}\nROLE: ${name}. Scenario: ${options.scenario}.\nApp: ${ORIGIN}${ENTRY}. Browser: start at 390x844. Output folder: /output/${name}.\n${scope}\n${assignment}\nTIME: ${seconds} seconds remain. Finish browser work and evidence audits at Unix ${exploration}; reserve the remaining time for final JSON. Return final JSON by Unix ${Math.floor(deadline / MILLISECONDS)}. Use at most ${CONFIG.browserCalls} browser calls. Batch related interactions with the browser code tool. Missing evidence stays blocked and keeps the review incomplete.\nTake screenshots without a filename, inspect the inline image, and retain its returned relative path. Return JSON directly; do not write duplicate report files.`;
   await writeFile(join(OUTPUT, name, "prompt.md"), instruction);
+  if (name === "reviewer")
+    await writeFile(
+      BRIDGE,
+      JSON.stringify({
+        url: process.env.QA_BRIDGE_URL,
+        token: process.env.QA_BRIDGE_TOKEN,
+      }),
+      { mode: 0o600 },
+    );
   const provider: Provider.Provider = Provider.select("claude");
   const invocation: Provider.Invocation = provider.invocation({
     work: WORK,
@@ -388,10 +409,15 @@ const phase = async (
       CREDENTIAL,
     );
   }
-  if (code !== 0)
-    throw new Error(
-      `${name} agent exited ${code}; inspect the temporary Claude log`,
+  if (code !== 0) {
+    const stderr: string = await readFile(
+      join("/tmp/qa-raw", name, "events.raw.stderr.log"),
+      "utf8",
     );
+    throw new Error(
+      `${name} agent exited ${code}: ${Provider.failure(stderr)}`,
+    );
+  }
 
   await provider.collect(
     join("/tmp/qa-raw", name, "events.raw.jsonl"),
@@ -431,7 +457,7 @@ export const compare = async (
   await save("matching/catalog.json", catalog);
   await save("matching/candidates.json", candidates);
   const schema: string = join(OUTPUT, "matching/schema.json");
-  await writeFile(schema, JSON.stringify(z.toJSONSchema(Protocol.decisions)));
+  await writeFile(schema, Provider.schema(Protocol.decisions));
   const instruction: string = Duplicates.prompt(catalog, candidates);
   await writeFile(join(OUTPUT, "matching/prompt.md"), instruction);
   const provider: Provider.Provider = Provider.select("claude");
@@ -467,7 +493,15 @@ export const compare = async (
       CREDENTIAL,
     );
   }
-  if (code !== 0) throw new Error(`Duplicate reviewer exited ${code}`);
+  if (code !== 0) {
+    const stderr: string = await readFile(
+      join("/tmp/qa-raw/matching/events.raw.stderr.log"),
+      "utf8",
+    );
+    throw new Error(
+      `Duplicate reviewer exited ${code}: ${Provider.failure(stderr)}`,
+    );
+  }
   await provider.collect(
     join("/tmp/qa-raw/matching/events.raw.jsonl"),
     join(OUTPUT, "matching/events.jsonl"),
@@ -737,6 +771,7 @@ const main = async (): Promise<void> => {
           revision: options.commit,
           settings: PROJECT.settings,
         }),
+        PROJECT,
       );
       ORIGIN = prepared.origin;
       ENTRY = prepared.entry;
@@ -749,13 +784,15 @@ const main = async (): Promise<void> => {
         `import { inspect } from "/quaz/scripts/qa/inspect.ts"; export default async ({ page }) => { if (!Object.hasOwn(page, "qaInspect")) Object.defineProperty(page, "qaInspect", { value: (flow, selector, paths) => inspect(page, flow, selector, paths, ${JSON.stringify(name)}) }); await page.context().route("**/*", async route => { if (new URL(route.request().url()).origin !== ${JSON.stringify(ORIGIN)}) { await route.abort("blockedbyclient"); return; } await route.continue(); }); };\n`,
       );
       await mkdir(join(OUTPUT, name), { recursive: true });
-      app = launch(
-        prepared.command[0],
-        prepared.command.slice(1),
-        `${name}/app`,
-        { ...prepared.env, PATH: process.env.PATH, HOME: "/tmp" },
-      );
+      if (prepared.command.length)
+        app = launch(
+          prepared.command[0],
+          prepared.command.slice(1),
+          `${name}/app`,
+          { ...prepared.env, PATH: process.env.PATH, HOME: "/tmp" },
+        );
       await ready(app);
+      if (PROJECT.revision === "target") await Project.checkTarget(PROJECT);
       await save(`${name}/fixture.json`, {
         scenario: options.scenario,
         directory,
@@ -776,6 +813,7 @@ const main = async (): Promise<void> => {
       project: PROJECT.id,
       fixture: fixture.metadata,
       origin: ORIGIN,
+      sourceAvailable: PROJECT.revision !== "target",
       startedAt: new Date(started).toISOString(),
     };
     await save("metadata.json", metadata);
