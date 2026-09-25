@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import CONFIG from "@qa/config.json";
 import { z } from "zod";
 
 export class OutputError extends Error {}
@@ -184,6 +185,8 @@ export const argumentsFor = (input: Input, schema: string): string[] => [
   "--no-session-persistence",
   "--permission-mode",
   "dontAsk",
+  "--effort",
+  CONFIG.claudeEffort,
   "--allowedTools",
   input.browser.length ? "mcp__mobile__* mcp__coverage__*" : "",
   "--output-format",
@@ -194,7 +197,8 @@ export const argumentsFor = (input: Input, schema: string): string[] => [
   "--tools",
   "",
   ...input.browser,
-  ...(input.model ? ["--model", input.model] : []),
+  "--model",
+  input.model ?? CONFIG.claudeModel,
 ];
 export const schema = (value: z.ZodType): string => {
   const output = z.toJSONSchema(value);

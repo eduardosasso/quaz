@@ -27,6 +27,8 @@ export const argumentsFor = (input: Model.Input): string[] => [
   "--no-session-persistence",
   "--permission-mode",
   "dontAsk",
+  "--effort",
+  input.effort,
   "--model",
   input.model,
 ];

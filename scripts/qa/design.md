@@ -50,7 +50,10 @@ Apply these criteria from Impeccable, Product Design Review, and better-layout:
 2. **Proportional emphasis.** Compare the space, contrast, and exposure given to each task role. Does optional work draw attention out of proportion to its importance?
 3. **Internal consistency.** Infer conventions from comparable elements. Identify exceptions in placement, exposure, or treatment. Compare equivalent states when possible.
 4. **Composition.** Explain the visual groups and reading path. Judge whether the layout helps users act, or simply distributes unrelated-looking elements across available space.
+
 5. **Control clarity.** Can a user tell which elements act, what information they affect, and what the current state means? Do not invent a role when evidence is absent. Similar-looking labels in separate states do not establish equivalent meaning. Verify roles through interaction; otherwise name the unknown element by its visible label only.
+
+Controls on one row can still form separate visual destinations when large gaps split related choices. Compare those gaps with the task roles before recommending more space or dividers.
 
 For a suspected concern, compare retaining the current arrangement with one plausible alternative. Name the benefit and tradeoff. Do not recommend change unless you can explain why the alternative better expresses the task or its priorities.
 Check every element named in an absolute layout claim. If one element aligns, describe the narrower difference instead of saying none align.

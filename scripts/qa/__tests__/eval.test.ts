@@ -32,8 +32,10 @@ const valid: Eval.Grade = { expected: [], findings: [], unsupported: [] };
 
 test("retries an invalid visual grade once", async (): Promise<void> => {
   const directories: string[] = [];
+  const prompts: string[] = [];
   const runner: Eval.Runner = async (value: Model.Input): Promise<unknown> => {
     directories.push(value.directory);
+    prompts.push(value.prompt);
 
     return directories.length === 1
       ? {
@@ -44,6 +46,9 @@ test("retries an invalid visual grade once", async (): Promise<void> => {
   };
   expect(await Eval.judge(runner, input, sample, review)).toEqual(valid);
   expect(directories).toEqual(["/tmp/judge-1", "/tmp/judge-1-retry"]);
+  expect(prompts[0]).toBe(input.prompt);
+  expect(prompts[1]).toContain("Unsupported claim quote is absent");
+  expect(prompts[1]).toContain("surface judgments and limitations");
 });
 
 test("does not retry a judge connection failure", async (): Promise<void> => {

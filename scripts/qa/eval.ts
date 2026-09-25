@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as Audit from "@qa/audit";
+import CONFIG from "@qa/config.json";
 import * as Claude from "@qa/eval-claude";
 import * as Model from "@qa/eval-model";
 import * as ReviewGuidance from "@qa/review";
@@ -260,11 +261,15 @@ export const judge = async (
   sample: Case,
   result: Review,
 ): Promise<Grade> => {
+  let feedback: string = "";
   for (let attempt: number = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
     let output: unknown;
     try {
       output = await runner({
         ...input,
+        prompt: feedback
+          ? `${input.prompt}\nThe previous grade failed validation: ${feedback}. Copy expected and finding quotes exactly from the named finding. Copy unsupported quotes exactly from the review, including surface judgments and limitations. Use finding:null and quote:"" for a miss.`
+          : input.prompt,
         directory: attempt === 1 ? input.directory : `${input.directory}-retry`,
       });
     } catch (error: unknown) {
@@ -273,6 +278,7 @@ export const judge = async (
       console.error(
         `Visual grade schema invalid for ${sample.id}, attempt ${attempt}: ${String(error)}`,
       );
+      feedback = error.message;
       continue;
     }
     try {
@@ -282,6 +288,7 @@ export const judge = async (
       console.error(
         `Visual grade invalid for ${sample.id}, attempt ${attempt}: ${String(error)}`,
       );
+      feedback = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -485,7 +492,8 @@ export const execute = async (
   const selectedSuite = {
     ...full,
     model:
-      options.model ?? (options.provider === "claude" ? "sonnet" : full.model),
+      options.model ??
+      (options.provider === "claude" ? CONFIG.claudeModel : full.model),
   };
   const split: Split = z.enum(SPLITS).parse(options.split ?? "calibration");
   const allImages: Buffer[][] = await Promise.all(

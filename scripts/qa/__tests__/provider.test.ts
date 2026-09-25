@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import CONFIG from "@qa/config.json";
 import * as Provider from "@qa/provider";
 import { z } from "zod";
 
@@ -26,6 +27,8 @@ test("Claude runs with a schema and only the requested browser", () => {
     "mcp__mobile__* mcp__coverage__*",
   );
   expect(args[args.indexOf("--tools") + 1]).toBe("");
+  expect(args[args.indexOf("--effort") + 1]).toBe(CONFIG.claudeEffort);
+  expect(args[args.indexOf("--model") + 1]).toBe(CONFIG.claudeModel);
   expect(args).not.toContain("Bash,Read,Skill");
   expect(
     Provider.argumentsFor({ ...input, browser: [] }, "{}")[

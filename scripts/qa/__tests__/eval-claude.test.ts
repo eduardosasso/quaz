@@ -35,6 +35,7 @@ test("Claude visual review disables tools and uses the subscription CLI", () => 
   expect(args[args.indexOf("--tools") + 1]).toBe("");
   expect(args[args.indexOf("--allowedTools") + 1]).toBe("");
   expect(args[args.indexOf("--model") + 1]).toBe("sonnet");
+  expect(args[args.indexOf("--effort") + 1]).toBe("high");
   expect(JSON.parse(args[args.indexOf("--json-schema") + 1]).$schema).toBe(
     undefined,
   );
