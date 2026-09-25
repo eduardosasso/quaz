@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import * as Audit from "@qa/audit";
+import * as Provider from "@qa/provider";
 import * as Review from "@qa/review";
 import * as Worker from "@qa/worker";
 
@@ -132,6 +133,85 @@ test("invalid visual audit retries with validation feedback", async () => {
   );
   expect(result.design.noPeers).toBeNull();
   expect(feedback).toEqual(["", "No peers conflict"]);
+});
+
+test("missing audit output retries with feedback", async () => {
+  const feedback: string[] = [];
+  const result: Review.Assessment = await Audit.retry(
+    original,
+    async (reason: string): Promise<unknown> => {
+      feedback.push(reason);
+      if (feedback.length === 1)
+        throw new Provider.OutputError(
+          "Claude QA did not return structured output",
+        );
+
+      return {
+        design: original.design,
+        candidates: original.candidates,
+        limitations: original.limitations,
+      };
+    },
+    async (value: Review.Assessment): Promise<Review.Assessment> => value,
+  );
+  expect(result.design).toEqual(original.design);
+  expect(feedback).toEqual(["", "Claude QA did not return structured output"]);
+});
+
+test("malformed audit event retries with feedback", async () => {
+  const feedback: string[] = [];
+  await Audit.retry(
+    original,
+    async (reason: string): Promise<unknown> => {
+      feedback.push(reason);
+      if (feedback.length === 1) return Provider.normalize('{"type":');
+
+      return {
+        design: original.design,
+        candidates: original.candidates,
+        limitations: original.limitations,
+      };
+    },
+    async (value: Review.Assessment): Promise<Review.Assessment> => value,
+  );
+  expect(feedback).toEqual(["", "Claude QA returned a malformed event"]);
+});
+
+test("audit provider failure stops without retry", async () => {
+  let calls: number = 0;
+  await expect(
+    Audit.retry(
+      original,
+      async (): Promise<unknown> => {
+        calls++;
+        throw new Error("Claude QA token is missing or invalid");
+      },
+      async (value: Review.Assessment): Promise<Review.Assessment> => value,
+    ),
+  ).rejects.toThrow("Claude QA token is missing or invalid");
+  expect(calls).toBe(1);
+});
+
+test("audit evidence read failure stops without retry", async () => {
+  let calls: number = 0;
+  await expect(
+    Audit.retry(
+      original,
+      async (): Promise<unknown> => {
+        calls++;
+
+        return {
+          design: original.design,
+          candidates: original.candidates,
+          limitations: original.limitations,
+        };
+      },
+      async (): Promise<Review.Assessment> => {
+        throw Object.assign(new Error("Evidence read failed"), { code: "EIO" });
+      },
+    ),
+  ).rejects.toThrow("Evidence read failed");
+  expect(calls).toBe(1);
 });
 
 test("second invalid visual audit stops the run", async () => {

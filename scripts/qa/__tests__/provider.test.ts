@@ -131,6 +131,13 @@ test("Claude missing result fails closed", () => {
   ).toThrow("structured output");
 });
 
+test("Claude malformed events have a safe retry error", () => {
+  expect(
+    (): ReturnType<typeof Provider.normalize> =>
+      Provider.normalize('{"type":"result","private":"secret"'),
+  ).toThrow(new Provider.OutputError("Claude QA returned a malformed event"));
+});
+
 test("Claude authentication errors name the credential", () => {
   expect(
     (): ReturnType<typeof Provider.normalize> =>

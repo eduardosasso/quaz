@@ -3,6 +3,9 @@ import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+
+export class OutputError extends Error {}
+
 export type Invocation = {
   command: string;
   args: string[];
@@ -109,8 +112,15 @@ export const normalize = (
   for (const line of lines
     .split("\n")
     .filter((value: string): boolean => !!value)) {
-    const value: unknown = JSON.parse(line);
-    const item = event.parse(value);
+    let item: z.infer<typeof event>;
+    try {
+      const value: unknown = JSON.parse(line);
+      item = event.parse(value);
+    } catch (error: unknown) {
+      if (error instanceof SyntaxError || error instanceof z.ZodError)
+        throw new OutputError("Claude QA returned a malformed event");
+      throw error;
+    }
     const startup = init.safeParse(item);
     if (startup.success)
       browser =
@@ -156,7 +166,7 @@ export const normalize = (
     }
   }
   if (output === undefined)
-    throw new Error("Claude QA did not return structured output");
+    throw new OutputError("Claude QA did not return structured output");
 
   return {
     events: recorded

@@ -1,3 +1,4 @@
+import * as Provider from "@qa/provider";
 import * as Review from "@qa/review";
 import { z } from "zod";
 
@@ -25,13 +26,22 @@ export const retry = async (
 ): Promise<Review.Assessment> => {
   let feedback: string = "";
   for (let attempt: number = 1; attempt <= ATTEMPTS; attempt++) {
-    const value: unknown = await invoke(feedback);
+    let invoked: boolean = false;
     try {
+      const value: unknown = await invoke(feedback);
+      invoked = true;
       const result: Review.Assessment = await validate(merge(review, value));
       console.log(JSON.stringify({ event: "visual-audit-valid", attempt }));
 
       return result;
     } catch (error: unknown) {
+      if (!invoked && !(error instanceof Provider.OutputError)) throw error;
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        typeof error.code === "string"
+      )
+        throw error;
       if (attempt === ATTEMPTS) throw error;
       console.error(JSON.stringify({ event: "visual-audit-invalid", attempt }));
       feedback =
