@@ -189,14 +189,14 @@ const mcp = (phase: Phase): string[] => {
     JSON.stringify({
       mcpServers: {
         mobile: { command: "bun", args },
-        ...(phase === "reviewer"
-          ? {
-              coverage: {
-                command: "bun",
-                args: ["--no-env-file", "/quaz/scripts/qa/coverage-mcp.ts"],
-              },
-            }
-          : {}),
+        coverage: {
+          command: "bun",
+          args: [
+            "--no-env-file",
+            "/quaz/scripts/qa/coverage-mcp.ts",
+            ...(phase === "validator" ? ["--validator"] : []),
+          ],
+        },
       },
     }),
   ];
@@ -596,7 +596,7 @@ const reviews = async (
       "validator",
       options,
       independent.validator,
-      `The app has restarted with fresh data and a new login for the original scenario. Reviewer changes do not exist here. Start from the supplied entry page and repeat the setup needed for each candidate, including creating any items from the case. Case context: ${JSON.stringify(selected)}. Independently reproduce these candidates: ${JSON.stringify(review.candidates)}. Do not claim another flow. Each confirmed candidate needs your own image-returned screenshot. Include a validator screenshot in top-level evidence too. With zero candidates, repeat the core case and capture it. After reproduction, audit the check ledger ${JSON.stringify(review.checks)} against reviewer/events.jsonl and reviewer/technical.json. Then read design from reviewer/checked.json and audit its control inventory, peer comparisons, and composition against the ordinary-state screenshot. Mark design unsupported for omitted controls or inadequate comparisons. Read evidence only after your own reproduction. Non-candidate checks require an evidence audit, not another complete test pass. List every inspected check in coverage.checked; list missing, inadequate, or contradicted evidence in coverage.unsupported. An optional repeat that fails to execute does not itself invalidate recorded evidence. Do not accept numbers or guide labels as proof. Report partial or blocked if unfinished.`,
+      `The app has restarted with fresh data and a new login for the original scenario. Reviewer changes do not exist here. Start from the supplied entry page and repeat the setup needed for each candidate, including creating any items from the case. Case context: ${JSON.stringify(selected)}. Independently reproduce these candidates: ${JSON.stringify(review.candidates)}. Do not claim another flow. Each confirmed candidate needs your own image-returned screenshot. Include a validator screenshot in top-level evidence too. With zero candidates, repeat the core case and capture it. After reproduction, use mcp__coverage__read to audit reviewer/events.jsonl, reviewer/technical.json, and reviewer/checked.json. The tool returns a page and nextOffset; use query to filter event lines. Audit the check ledger ${JSON.stringify(review.checks)}, design controls, peer comparisons, and composition against the ordinary-state screenshot. Mark design unsupported for omitted controls or inadequate comparisons. Read evidence only after your own reproduction. Non-candidate checks require an evidence audit, not another complete test pass. List every inspected check in coverage.checked; list missing, inadequate, or contradicted evidence in coverage.unsupported. An optional repeat that fails to execute does not itself invalidate recorded evidence. Do not accept numbers or guide labels as proof. Report partial or blocked if unfinished.`,
       reviewDeadline - REPORT_SECONDS * MILLISECONDS,
     ),
     OUTPUT,

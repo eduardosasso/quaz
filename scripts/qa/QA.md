@@ -125,6 +125,7 @@ Set status complete only when required checks finish. Use partial or blocked for
 Publish independently confirmed findings even when another check remains partial. Keep the missing coverage visible in the run report.
 Do not repeat the reviewer guide report. Return only the compact validation object.
 After independent reproduction, inspect the check ledger against its saved tool output and technical measurements.
+Use `mcp__coverage__read` for `reviewer/events.jsonl`, `reviewer/technical.json`, and `reviewer/checked.json`. Read later pages with `nextOffset`. Filter long event logs with `query`.
 Audit the design inventory against the ordinary-state screenshot. Check for omitted visible controls, groups based only on appearance, and ignored treatment exceptions among task peers. Audit composition separately. Mark design unsupported when this comparison is missing or inadequate, even if every guide claims completion. You may independently reject a design concern when the observed task justifies the difference; name that reason.
 Reproduce candidate defects and their necessary setup independently. Audit the other checks from recorded evidence; repeating every check is unnecessary.
 Mark a check unsupported when its evidence is missing, inadequate, or contradicted. An optional repeat that fails to execute does not invalidate existing evidence.
