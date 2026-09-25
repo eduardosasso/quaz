@@ -41,6 +41,12 @@ test("verifier receives criteria and evidence without answer labels or case hint
   const value: string = Eval.prompt(sample(), "Worker policy");
   expect(value).toContain(Review.VERIFICATION_SCOPE);
   expect(value).toContain(Review.verificationPrompt({ test: sample().test }));
+  expect(value).toContain(
+    "Copy the supplied expected string exactly into expected",
+  );
+  expect(value).toContain(
+    "Copy each supplied acceptance string exactly into checks[].criterion",
+  );
   expect(value).toContain(sample().observations);
   expect(value).not.toContain(sample().id);
   expect(value).not.toContain('"labels"');
