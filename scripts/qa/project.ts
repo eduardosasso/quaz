@@ -157,6 +157,34 @@ export const validate = (value: Prepared, project: Project): Prepared => {
   return { ...value, origin: normalized };
 };
 
+export const deployed = async (
+  project: Project,
+  request: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response> = fetch,
+): Promise<string | null> => {
+  if (!project.deployment) return null;
+  const response: Response = await request(project.deployment.url, {
+    method: "GET",
+    headers: { "Cache-Control": "no-cache" },
+    redirect: "error",
+    signal: AbortSignal.timeout(Protocol.REQUEST_MS),
+  });
+  if (!response.ok)
+    throw new Error(`Deployment probe returned ${response.status}`);
+
+  let revision: string | null = response.headers.get("x-quaz-revision");
+  if (!revision) {
+    const body: unknown = await response.json();
+    const parsed = z.object({ revision: z.string() }).safeParse(body);
+    revision = parsed.success ? parsed.data.revision : null;
+  }
+  const parsed = Protocol.revision.safeParse(revision);
+
+  return parsed.success ? parsed.data : null;
+};
+
 export const checkTarget = async (
   project: Project,
   request: (
@@ -166,23 +194,7 @@ export const checkTarget = async (
 ): Promise<string> => {
   if (project.revision !== "target" || !project.deployment?.revision)
     throw new Error("Project has no deployed target revision");
-  const response: Response = await request(project.deployment.url, {
-    method: "GET",
-    redirect: "error",
-    signal: AbortSignal.timeout(Protocol.REQUEST_MS),
-  });
-  if (!response.ok)
-    throw new Error("Target deployment revision does not match project config");
-
-  let revision: string | null = response.headers.get("x-quaz-revision");
-  if (!revision) {
-    const body: unknown = await response.json();
-    const parsed: { revision: string } = z
-      .object({ revision: z.string() })
-      .parse(body);
-    revision = parsed.revision;
-  }
-  if (revision !== project.deployment.revision)
+  if ((await deployed(project, request)) !== project.deployment.revision)
     throw new Error("Target deployment revision does not match project config");
 
   return project.deployment.revision;

@@ -50,7 +50,7 @@ On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:
 
 Run the **Plan version** workflow on `main` to select a stable SemVer bump from merged commits. Claude chooses major, minor, or patch and gives one reason. The workflow accepts an explicit override. A missing or invalid model answer stops the plan. Apply that plan in a normal pull request, then create an explicit `vX.Y.Z` Git tag on its merged commit. The tag workflow publishes that version tag only when it matches `package.json` and points to a commit on `main`.
 
-The shared Quaz image holds the QA tools, runner, and pinned Impeccable skill. The same image runs in controller and worker mode for every remote target. Each project config selects a target URL and QA scenarios. The extraction cutover gates remain in [draft PR #2](https://github.com/eduardosasso/quaz/pull/2).
+The shared Quaz image holds the QA tools, runner, and pinned Impeccable skill. The same image runs in controller and worker mode for every remote target. Each project config selects a target URL and QA scenarios. [The extraction map](docs/extraction.md) records the remaining cutover proof.
 
 ## Claude subscription token
 

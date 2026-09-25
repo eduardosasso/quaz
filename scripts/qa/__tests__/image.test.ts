@@ -239,7 +239,8 @@ test("remote target uses the deployed revision with one Quaz image", async () =>
   });
   expect(project.sources).toEqual([]);
   expect(await Runner.revision(project, undefined, request)).toBe(revision);
-  expect(requests).toEqual([`GET:${url}`]);
+  expect(await Project.deployed(project, request)).toBe(revision);
+  expect(requests).toEqual([`GET:${url}`, `GET:${url}`]);
   await expect(
     Runner.revision(
       { ...project, deployment: { url, revision: "e".repeat(64) } },

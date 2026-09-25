@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Client } from "@qa/client";
 import * as Duplicates from "@qa/duplicates";
-import type { Project } from "@qa/project";
+import * as Project from "@qa/project";
 import * as Review from "@qa/review";
 import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
@@ -26,24 +26,11 @@ export const result = (
   verdict,
   deployment: null,
 });
-export const deployed = async (project: Project): Promise<string | null> => {
-  if (!project.deployment) return null;
-  const response: Response = await fetch(project.deployment.url, {
-    headers: { "Cache-Control": "no-cache" },
-    signal: AbortSignal.timeout(Protocol.REQUEST_MS),
-    redirect: "error",
-  });
-  if (!response.ok)
-    throw new Error(`Deployment probe returned ${response.status}`);
-  const body: unknown = await response.json();
-  if (!body || typeof body !== "object" || !("revision" in body)) return null;
-  const parsed = Protocol.revision.safeParse(body.revision);
-  return parsed.success ? parsed.data : null;
-};
+export const deployed = Project.deployed;
 const resolveFix = async (
   client: Client,
   ticket: Protocol.Ticket,
-  project: Project,
+  project: Project.Project,
 ): Promise<string | null> => {
   if (!project.deployment?.repository) return ticket.fix;
   const comments: string[] = await client.comments(ticket.id);
@@ -92,7 +79,7 @@ const resolveFix = async (
 export const plan = async (
   client: Client,
   run: Protocol.Run,
-  project: Project,
+  project: Project.Project,
   tickets?: number[],
 ): Promise<Plan> => {
   const state: Protocol.State = await client.request(
@@ -243,7 +230,7 @@ export const publication = async (
   const evidence: number[] = [...ids.values()];
   if (run.mode === "smoke")
     return {
-      ...result("Browser, login, and persistence smoke checks pass."),
+      ...result("Configured project smoke check passed."),
       report,
       evidence,
     };

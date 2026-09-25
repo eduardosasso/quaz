@@ -7,6 +7,17 @@ import * as Lifecycle from "@qa/lifecycle";
 import * as Review from "@qa/review";
 import type * as Protocol from "@/qa_protocol";
 
+test("generic smoke report does not claim login or persistence", async () => {
+  const finished: Protocol.Finish = await Lifecycle.publication(
+    { smoke: { status: 200 } },
+    { mode: "smoke" } as Protocol.Run,
+    "/unused",
+    new Map(),
+    { ticket: null, deployment: null, result: null },
+  );
+  expect(finished.summary).toBe("Configured project smoke check passed.");
+});
+
 test("discovery cannot publish without a completed visual audit", async () => {
   const finished: Protocol.Finish = await Lifecycle.publication(
     { audit: { status: "skipped", reason: "Short run" } },
