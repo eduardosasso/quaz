@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type * as Model from "@qa/eval-model";
+import * as Model from "@qa/eval-model";
 import * as Provider from "@qa/provider";
+import { z } from "zod";
 
 const CLAUDE: string = "claude";
 const IMAGE: string = "image/png";
@@ -89,7 +90,19 @@ export const run = async (input: Model.Input): Promise<unknown> => {
       `${Provider.failure(errors)}; inspect ${join(input.directory, "stderr.log")}`,
     );
   const output: unknown = Provider.normalize(events).output;
-  const result: unknown = input.schema.parse(output);
+  let result: unknown;
+  try {
+    result = input.schema.parse(output);
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError)
+      throw new Model.InvalidOutputError(
+        "Model output does not match its schema",
+        {
+          cause: error,
+        },
+      );
+    throw error;
+  }
   await writeFile(
     join(input.directory, "response.json"),
     JSON.stringify(result),

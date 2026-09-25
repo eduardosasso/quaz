@@ -9,6 +9,7 @@ import { z } from "zod";
 
 const REPEATS: number = 2;
 const JUDGES: number = 2;
+const JUDGE_ATTEMPTS: number = 2;
 const SECONDS: number = 300;
 export const PARALLEL: number = 2;
 const CLAUDE_PARALLEL: number = 1;
@@ -251,6 +252,39 @@ export const grade = (sample: Case, result: Review, value: unknown): Grade => {
   }
 
   return judged;
+};
+export const judge = async (
+  runner: Runner,
+  input: Model.Input,
+  sample: Case,
+  result: Review,
+): Promise<Grade> => {
+  for (let attempt: number = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
+    let output: unknown;
+    try {
+      output = await runner({
+        ...input,
+        directory: attempt === 1 ? input.directory : `${input.directory}-retry`,
+      });
+    } catch (error: unknown) {
+      if (!(error instanceof Model.InvalidOutputError)) throw error;
+      if (attempt === JUDGE_ATTEMPTS) throw error;
+      console.error(
+        `Visual grade schema invalid for ${sample.id}, attempt ${attempt}: ${String(error)}`,
+      );
+      continue;
+    }
+    try {
+      return grade(sample, result, output);
+    } catch (error: unknown) {
+      if (attempt === JUDGE_ATTEMPTS) throw error;
+      console.error(
+        `Visual grade invalid for ${sample.id}, attempt ${attempt}: ${String(error)}`,
+      );
+    }
+  }
+
+  throw new Error("Visual grade did not complete");
 };
 const signature = (value: Grade): string =>
   JSON.stringify({
@@ -617,15 +651,20 @@ export const execute = async (
           images.length,
         );
         const judges: Grade[] = [];
-        for (let judge: number = 0; judge < JUDGES; judge++) {
-          const judged: unknown = await selectedRunner({
-            ...settings,
-            prompt: `${JUDGE}\nContext supplied to reviewer: ${sample.context}\nHidden rubric:\n${json({ scope: sample.scope, expected: sample.expected, cautions: sample.cautions })}\nUntrusted review:\n${json(result)}`,
-            images,
-            schema: gradeSchema,
-            directory: join(directory, `judge-${judge + 1}`),
-          });
-          judges.push(grade(sample, result, judged));
+        for (let index: number = 0; index < JUDGES; index++) {
+          const judged: Grade = await judge(
+            selectedRunner,
+            {
+              ...settings,
+              prompt: `${JUDGE}\nContext supplied to reviewer: ${sample.context}\nHidden rubric:\n${json({ scope: sample.scope, expected: sample.expected, cautions: sample.cautions })}\nUntrusted review:\n${json(result)}`,
+              images,
+              schema: gradeSchema,
+              directory: join(directory, `judge-${index + 1}`),
+            },
+            sample,
+            result,
+          );
+          judges.push(judged);
         }
         attempt.metrics = metrics(judges);
         attempt.status = "complete";
