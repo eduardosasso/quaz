@@ -36,6 +36,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" \
   echo "Install $DIRECTORY/controller.json, project.json, and target source on $HOST first" >&2
   exit 1
 }
+ssh -o BatchMode=yes "$TARGET" python3 - "$DIRECTORY/project.json" < scripts/source.py
 
 QUAZ_DOCKER_GID="$(ssh "$TARGET" stat -c %g /var/run/docker.sock)"
 export QUAZ_DOCKER_GID

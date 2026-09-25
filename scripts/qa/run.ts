@@ -39,6 +39,7 @@ export type Options = {
   runtime?: Docker.Runtime;
   output?: string;
   tickets?: number[];
+  expectedRevision?: string;
 };
 export const options = (args: string[]): Options => {
   const { values } = parseArgs({
@@ -119,6 +120,7 @@ export const source = (project: Project.Project): string => {
     files(join(project.root, entry)),
   ))
     digest.update(path.slice(project.root.length)).update(readFileSync(path));
+  digest.update("recipe").update(readFileSync(Image.recipe(project)));
   return digest.digest("hex");
 };
 const command = async (args: string[], cwd: string): Promise<string> => {
@@ -140,7 +142,6 @@ const command = async (args: string[], cwd: string): Promise<string> => {
 };
 export const revision = async (
   project: Project.Project,
-  runtime?: Docker.Runtime,
   request: (
     input: RequestInfo | URL,
     init?: RequestInit,
@@ -148,16 +149,7 @@ export const revision = async (
 ): Promise<string> => {
   if (project.revision === "target")
     return Project.checkTarget(project, request);
-  if (project.revision === "source") {
-    const current: string = source(project);
-    if (runtime && runtime.revision !== current)
-      throw new Error(
-        "Project source changed since the QA image build; rebuild the project image",
-      );
-
-    return current;
-  }
-  if (runtime) return Protocol.revision.parse(runtime.revision);
+  if (project.revision === "source") return source(project);
   if (
     await command(
       ["git", "status", "--porcelain", "--untracked-files=normal"],
@@ -166,9 +158,40 @@ export const revision = async (
   )
     throw new Error("Git revision verification requires a clean checkout");
 
-  return Protocol.revision.parse(
+  const current: string = Protocol.revision.parse(
     await command(["git", "rev-parse", "HEAD"], project.root),
   );
+  if (
+    project.deployment &&
+    (await Project.deployed(project, request)) !== current
+  )
+    throw new Error("Project checkout does not match the deployed revision");
+
+  return current;
+};
+export const checkRevision = async (
+  project: Project.Project,
+  expected: string,
+): Promise<void> => {
+  if ((await revision(project)) !== expected)
+    throw new Error("Project revision changed; restart the QA controller");
+};
+export const projectImage = (
+  project: Project.Project,
+  base: string,
+  fingerprint: string,
+  revision: string,
+): { tag: string; build: boolean } => {
+  if (project.revision === "target") return { tag: base, build: false };
+  const digest: string = createHash("sha256")
+    .update(project.id)
+    .update(fingerprint)
+    .update(revision)
+    .update(base)
+    .update(readFileSync(Image.recipe(project)))
+    .digest("hex");
+
+  return { tag: `${CONFIG.image}:${digest.slice(0, 32)}`, build: true };
 };
 export const container = (
   input: Options,
@@ -442,7 +465,9 @@ export const run = async (
     }
     validate(input);
     const fingerprint: string = source(project);
-    const selectedRevision: string = await revision(project, input.runtime);
+    const selectedRevision: string = await revision(project);
+    if (input.expectedRevision && selectedRevision !== input.expectedRevision)
+      throw new Error("Project revision changed; restart the QA controller");
     const base: string = input.runtime?.image ?? (await Image.base());
     const temporary: string =
       input.runtime?.directory ?? input.output ?? join(ROOT, "artifacts/qa");
@@ -451,11 +476,13 @@ export const run = async (
     const prefix: string = `qa-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const records: Protocol.Run[] = [];
     const attempts: string[] = [];
-    let image: string =
-      input.runtime?.image ??
-      (project.revision === "target"
-        ? base
-        : `${CONFIG.image}:${fingerprint.slice(0, 16)}`);
+    const planned: { tag: string; build: boolean } = projectImage(
+      project,
+      base,
+      fingerprint,
+      selectedRevision,
+    );
+    let image: string = planned.tag;
     const names: Set<string> = new Set();
     const endpoints: Map<string, { run: Protocol.Run }> = new Map();
     const bridge = Bun.serve({
@@ -553,7 +580,7 @@ export const run = async (
         ["docker", "info", "--format", "{{.ServerVersion}}"],
         project.root,
       );
-      if (!input.runtime && project.revision !== "target") {
+      if (planned.build) {
         console.log(`Preparing ${project.id} QA image`);
         active();
         const context: string = await Image.stage(project, scratch);
@@ -574,6 +601,12 @@ export const run = async (
           throw new Error(`QA image build failed; ${scratch}/build-error.log`);
         if (source(project) !== fingerprint)
           throw new Error("Source changed during the build");
+        if (
+          projectImage(project, base, fingerprint, selectedRevision).tag !==
+          planned.tag
+        )
+          throw new Error("Project build recipe changed during the build");
+        await checkRevision(project, selectedRevision);
         image = await command(
           ["docker", "image", "inspect", "--format", "{{.Id}}", image],
           project.root,

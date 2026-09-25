@@ -43,8 +43,8 @@ const description = z.object({
           Target: z.string(),
         }),
       )
-      .nullable(),
-    Binds: z.array(z.string()).nullable(),
+      .nullish(),
+    Binds: z.array(z.string()).nullish(),
   }),
   Mounts: z.array(
     z.object({

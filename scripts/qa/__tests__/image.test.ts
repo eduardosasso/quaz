@@ -148,6 +148,166 @@ test("project image extends a pinned Quaz base", () => {
   );
 });
 
+test("source projects need a derived image", () => {
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-recipe-"));
+  folders.push(folder);
+  const dockerfile: string = join(folder, "Dockerfile");
+  writeFileSync(dockerfile, "FROM source-one");
+  const project: Project.Project = Project.schema.parse({
+    id: "sample",
+    root: "/sample",
+    dockerfile,
+    sources: ["app.ts"],
+    scenarios: ["empty"],
+    revision: "source",
+  });
+  const fingerprint: string = "b".repeat(64);
+  const base: string = `sha256:${"a".repeat(64)}`;
+  const planned: { tag: string; build: boolean } = Runner.projectImage(
+    project,
+    base,
+    fingerprint,
+    "revision-one",
+  );
+  expect(
+    Runner.projectImage(
+      { ...project, revision: "git" },
+      base,
+      fingerprint,
+      "revision-one",
+    ),
+  ).toEqual(planned);
+  expect(planned.tag).toMatch(/^quaz:[a-f0-9]{32}$/);
+  expect(planned.build).toBe(true);
+  expect(
+    Runner.projectImage(
+      { ...project, id: "other" },
+      base,
+      fingerprint,
+      "revision-one",
+    ).tag,
+  ).not.toBe(planned.tag);
+  expect(
+    Runner.projectImage(
+      project,
+      `sha256:${"c".repeat(64)}`,
+      fingerprint,
+      "revision-one",
+    ).tag,
+  ).not.toBe(planned.tag);
+  expect(
+    Runner.projectImage(project, base, fingerprint, "revision-two").tag,
+  ).not.toBe(planned.tag);
+  writeFileSync(dockerfile, "FROM source-two");
+  expect(
+    Runner.projectImage(project, base, fingerprint, "revision-one").tag,
+  ).not.toBe(planned.tag);
+  expect(
+    Runner.projectImage(
+      { ...project, revision: "target" },
+      base,
+      fingerprint,
+      "revision-one",
+    ),
+  ).toEqual({ tag: base, build: false });
+});
+
+test("deployment checks target source before startup", () => {
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-source-gate-"));
+  folders.push(folder);
+  const config: string = join(folder, "project.json");
+  const script: string = join(import.meta.dir, "../../source.py");
+  const check = (): ReturnType<typeof Bun.spawnSync> =>
+    Bun.spawnSync(["python3", script, config]);
+  writeFileSync(
+    config,
+    JSON.stringify({ root: "app", sources: ["app.ts"], revision: "source" }),
+  );
+  expect(check().exitCode).not.toBe(0);
+  mkdirSync(join(folder, "app"));
+  writeFileSync(join(folder, "app/app.ts"), "export const value = true;");
+  expect(check().exitCode).toBe(0);
+  writeFileSync(
+    config,
+    JSON.stringify({
+      root: "app",
+      dockerfile: "app/Dockerfile",
+      sources: ["app.ts"],
+      revision: "source",
+    }),
+  );
+  expect(check().exitCode).not.toBe(0);
+  writeFileSync(join(folder, "app/Dockerfile"), "FROM scratch");
+  expect(check().exitCode).toBe(0);
+  writeFileSync(
+    config,
+    JSON.stringify({
+      root: "app",
+      dockerfile: "app/Dockerfile",
+      sources: ["app.ts"],
+      revision: "git",
+    }),
+  );
+  expect(check().exitCode).not.toBe(0);
+  expect(
+    Bun.spawnSync(["git", "-C", join(folder, "app"), "init", "-q"]).exitCode,
+  ).toBe(0);
+  expect(
+    Bun.spawnSync([
+      "git",
+      "-C",
+      join(folder, "app"),
+      "add",
+      "app.ts",
+      "Dockerfile",
+    ]).exitCode,
+  ).toBe(0);
+  expect(
+    Bun.spawnSync([
+      "git",
+      "-C",
+      join(folder, "app"),
+      "-c",
+      "user.name=QA",
+      "-c",
+      "user.email=qa@example.test",
+      "commit",
+      "-qm",
+      "fixture",
+    ]).exitCode,
+  ).toBe(0);
+  expect(check().exitCode).toBe(0);
+  const commit: string = Bun.spawnSync([
+    "git",
+    "-C",
+    join(folder, "app"),
+    "rev-parse",
+    "HEAD",
+  ])
+    .stdout.toString()
+    .trim();
+  const version: string = join(folder, "version.json");
+  writeFileSync(version, JSON.stringify({ revision: commit }));
+  writeFileSync(
+    config,
+    JSON.stringify({
+      root: "app",
+      dockerfile: "app/Dockerfile",
+      sources: ["app.ts"],
+      revision: "git",
+      deployment: { url: `file://${version}` },
+    }),
+  );
+  expect(check().exitCode).toBe(0);
+  writeFileSync(version, JSON.stringify({ revision: "a".repeat(40) }));
+  expect(check().exitCode).not.toBe(0);
+  writeFileSync(version, JSON.stringify({ revision: commit }));
+  writeFileSync(join(folder, "app/app.ts"), "export const value = false;");
+  expect(check().exitCode).not.toBe(0);
+  writeFileSync(config, JSON.stringify({ revision: "target" }));
+  expect(check().exitCode).toBe(0);
+});
+
 test("release workflow supplies every base image build argument", () => {
   const workflow: string = readFileSync(
     join(import.meta.dir, "../../../.github/workflows/validate.yml"),
@@ -194,29 +354,79 @@ test("base image override needs an immutable digest", async () => {
   ).toBe(false);
 });
 
-test("controller rejects a project image built from older source", async () => {
+test("controller reads the current project source revision", async () => {
   const folder: string = mkdtempSync(join(tmpdir(), "quaz-revision-"));
   folders.push(folder);
   writeFileSync(join(folder, "app.ts"), "first");
+  const dockerfile: string = join(folder, "Dockerfile");
+  writeFileSync(dockerfile, "FROM first");
   const project: Project.Project = Project.schema.parse({
     id: "sample",
     root: folder,
+    dockerfile,
     sources: ["app.ts"],
     scenarios: ["empty"],
     revision: "source",
   });
   const built: string = await Runner.revision(project);
+  await Runner.checkRevision(project, built);
   writeFileSync(join(folder, "app.ts"), "second");
-  await expect(
-    Runner.revision(project, {
-      image: `sha256:${"a".repeat(64)}`,
-      revision: built,
-      volume: "quaz-state",
-      directory: "/qa",
-      network: "qa-private",
-      owner: "controller",
-    }),
-  ).rejects.toThrow("rebuild the project image");
+  expect(await Runner.revision(project)).not.toBe(built);
+  await expect(Runner.checkRevision(project, built)).rejects.toThrow(
+    "restart the QA controller",
+  );
+  const changed: string = await Runner.revision(project);
+  writeFileSync(dockerfile, "FROM second");
+  expect(await Runner.revision(project)).not.toBe(changed);
+});
+
+test("deployed Git revision must match the target checkout", async () => {
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-deployed-git-"));
+  folders.push(folder);
+  writeFileSync(join(folder, "app.ts"), "export const value = true;");
+  expect(Bun.spawnSync(["git", "-C", folder, "init", "-q"]).exitCode).toBe(0);
+  expect(Bun.spawnSync(["git", "-C", folder, "add", "app.ts"]).exitCode).toBe(
+    0,
+  );
+  expect(
+    Bun.spawnSync([
+      "git",
+      "-C",
+      folder,
+      "-c",
+      "user.name=QA",
+      "-c",
+      "user.email=qa@example.test",
+      "commit",
+      "-qm",
+      "fixture",
+    ]).exitCode,
+  ).toBe(0);
+  const commit: string = Bun.spawnSync([
+    "git",
+    "-C",
+    folder,
+    "rev-parse",
+    "HEAD",
+  ])
+    .stdout.toString()
+    .trim();
+  const project: Project.Project = Project.schema.parse({
+    id: "sample",
+    root: folder,
+    sources: ["app.ts"],
+    scenarios: ["empty"],
+    revision: "git",
+    deployment: { url: "https://target.example/version" },
+  });
+  const current = async (): Promise<Response> =>
+    Response.json({ revision: commit });
+  const old = async (): Promise<Response> =>
+    Response.json({ revision: "a".repeat(40) });
+  expect(await Runner.revision(project, current)).toBe(commit);
+  await expect(Runner.revision(project, old)).rejects.toThrow(
+    "does not match the deployed revision",
+  );
 });
 
 test("remote target uses the deployed revision with one Quaz image", async () => {
@@ -238,13 +448,12 @@ test("remote target uses the deployed revision with one Quaz image", async () =>
     deployment: { url, revision },
   });
   expect(project.sources).toEqual([]);
-  expect(await Runner.revision(project, undefined, request)).toBe(revision);
+  expect(await Runner.revision(project, request)).toBe(revision);
   expect(await Project.deployed(project, request)).toBe(revision);
   expect(requests).toEqual([`GET:${url}`, `GET:${url}`]);
   await expect(
     Runner.revision(
       { ...project, deployment: { url, revision: "e".repeat(64) } },
-      undefined,
       request,
     ),
   ).rejects.toThrow("does not match");
@@ -268,12 +477,11 @@ test("remote target accepts a generic JSON version endpoint", async () => {
     revision: "target",
     deployment: { url, revision },
   });
-  expect(await Runner.revision(project, undefined, request)).toBe(revision);
+  expect(await Runner.revision(project, request)).toBe(revision);
   expect(requests).toEqual([`GET:${url}`]);
   await expect(
     Runner.revision(
       { ...project, deployment: { url, revision: "e".repeat(40) } },
-      undefined,
       request,
     ),
   ).rejects.toThrow("does not match");

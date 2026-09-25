@@ -390,7 +390,7 @@ export const start = async (
     await Docker.cleanup(runtime);
     await Docker.network(runtime);
     connected = true;
-    const revision: string = await Runner.revision(project, runtime);
+    const revision: string = await Runner.revision(project);
     const log = (event: Record<string, unknown>): void =>
       console.log(JSON.stringify(event));
     log({
@@ -402,6 +402,7 @@ export const start = async (
     });
     await loop(settings, project, revision, signal, {
       state: async (): Promise<Protocol.State> => {
+        await Runner.checkRevision(project, revision);
         const state: Protocol.State = await client.request(
           `/state?project=${encodeURIComponent(project.id)}&revision=${revision}`,
         );
@@ -417,6 +418,7 @@ export const start = async (
             mode: job.mode,
             scenarios: [job.scenario],
             tickets: job.ticket ? [job.ticket] : undefined,
+            expectedRevision: revision,
           },
           stopping,
           client,

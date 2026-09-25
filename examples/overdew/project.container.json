@@ -1,6 +1,6 @@
 {
   "id": "overdew",
-  "root": "/app",
+  "root": "/var/lib/quaz/overdew/source",
   "sources": [
     "package.json",
     "bun.lock",

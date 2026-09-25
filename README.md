@@ -28,7 +28,7 @@ For example, a Quaz run can test RDLTR and create its finding card in Overdew. A
 One Quaz image runs the controller and every worker. Run the target app separately, then set `revision` to `target` in its project config. Set `deployment.url` to a reachable revision endpoint and `deployment.revision` to its deployed commit. A `GET` request to that endpoint must return the revision in an `x-quaz-revision` header or a JSON `revision` field. Set `settings.origin` to the same origin, with `settings.entry` and `settings.ready` as paths within it. A custom adapter must return that same origin. Quaz checks the revision before, during, and after each run. Quaz does not need the target source or its image.
 Remote targets receive browser measurements without source files. The source detector reports unavailable for these runs.
 
-The older local source mode remains available for migration. It builds a Quaz image with app sources and starts the app inside each worker. New target integrations use the shared Quaz image.
+Source mode builds a disposable app image from a checkout on the Docker host. The controller and workers still use the same Quaz base. Set `revision` to `git` for deployed-fix checks. Keep the checkout clean and at the deployed commit. Restart the controller after updating that checkout. The default project Dockerfile supports Bun apps with a `build` script. Set `dockerfile` in the project config for other stacks.
 
 Use `--mode discover` for a guided review. The controller selects reported fixes for `--mode verify`. Overdew holds the shared run state in a generic board document. `QUAZ_DB` is only an import source on first start. Set `QUAZ_BOOTSTRAP=empty` for a new board. Remove that setting after the first snapshot is saved.
 
@@ -60,7 +60,7 @@ The controller reads `QUAZ_TRACKER_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from Qua
 
 ## Controller startup contract
 
-Build or pull the shared Quaz image. Set `QUAZ_BASE_IMAGE` to a registry image with an `@sha256:` digest to use a published image. The published image must match a clean Quaz checkout at the same commit. Keep the project config at the same absolute path on the Docker host and inside the controller. The target app runs separately and must be reachable from the worker's Docker network.
+Build or pull the shared Quaz image. Set `QUAZ_BASE_IMAGE` to a registry image with an `@sha256:` digest to use a published image. The published image must match a clean Quaz checkout at the same commit. Keep the project config at the same absolute path on the Docker host and inside the controller. For source mode, mount the complete target checkout at the project config's `root`. The deployment preflight checks declared source files, any custom Dockerfile, and a clean Git checkout. When a deployment URL is set, its revision must match that checkout. For remote mode, the target app must be reachable from the worker's Docker network.
 
 The controller needs a project config and a controller config. The controller config names the project config, for example `{"project":"/absolute/path/to/project.json","mode":"auto"}`. Build the shared image before starting the controller:
 

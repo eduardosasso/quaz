@@ -293,6 +293,7 @@ describe("QA orchestration boundaries", (): void => {
     const project: string = join(cancelled, "project.json");
     await mkdir(binaries, { recursive: true });
     await writeFile(join(cancelled, "app.ts"), "export const value = 1;");
+    await writeFile(join(cancelled, "Dockerfile"), "FROM scratch");
     await writeFile(project, JSON.stringify(PROJECT));
     await writeFile(
       join(binaries, "docker"),
@@ -404,6 +405,7 @@ describe("QA orchestration boundaries", (): void => {
         )) as typeof Bun.spawn,
     );
     await writeFile(join(startup, "app.ts"), "export const value = 1;");
+    await writeFile(join(startup, "Dockerfile"), "FROM scratch");
     await writeFile(project, JSON.stringify(PROJECT));
     const records: Protocol.Run[] = [];
     const tracking: Client.Client = {

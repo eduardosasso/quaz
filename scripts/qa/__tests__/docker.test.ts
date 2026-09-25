@@ -44,6 +44,12 @@ test("controller requires persistent state", () => {
     (): Docker.Runtime => Docker.runtime(state([volume("/qa")], true)),
   ).toThrow("writable named volume at /qa");
   expect(Docker.runtime(state([volume("/qa")])).volume).toBe("quaz-qa");
+  expect(
+    Docker.runtime({
+      ...(state([volume("/qa")]) as Record<string, unknown>),
+      HostConfig: { Binds: ["quaz-qa:/qa"] },
+    }).volume,
+  ).toBe("quaz-qa");
 });
 
 test("controller keeps a network with attached target containers", () => {

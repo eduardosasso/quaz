@@ -133,6 +133,8 @@ export const base = async (): Promise<string> => {
 
   return `${BASE}@${id.trim()}`;
 };
+export const recipe = (project: Project.Project): string =>
+  project.dockerfile || resolve(import.meta.dir, "../../Dockerfile");
 export const args = (
   project: Project.Project,
   revision: string,
@@ -143,7 +145,7 @@ export const args = (
   "docker",
   "build",
   "-f",
-  project.dockerfile || resolve(import.meta.dir, "../../Dockerfile"),
+  recipe(project),
   ...Object.entries({
     QUAZ_BASE: base,
     QA_REVISION: revision,
