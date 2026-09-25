@@ -33,6 +33,7 @@ type RunRow = Protocol.Run & {
   publish_held: string | null;
 };
 type RawRunRow = Omit<RunRow, "runner"> & { runner: string | null };
+type ExpiredRun = { id: string; note_id: number | null };
 type FindingRow = {
   project: string;
   fingerprint: string;
@@ -117,10 +118,17 @@ export const prepare = (db: Database): void => {
       .all()
       .map((column): string => column.name),
   );
-  if (!findingColumns.has("verified_at"))
-    db.exec(
-      "ALTER TABLE qa_findings ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0",
-    );
+  const cutoverAt: number = Date.now() - 1;
+  db.transaction((): void => {
+    if (!findingColumns.has("verified_at")) {
+      db.exec(
+        "ALTER TABLE qa_findings ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    db.query(
+      "UPDATE qa_findings SET verified_at=? WHERE verified_through>0 AND verified_at=0",
+    ).run(cutoverAt);
+  })();
   const columns: Set<string> = new Set(
     db
       .query<{ name: string }, []>("PRAGMA table_info(qa_runs)")
@@ -388,16 +396,16 @@ export const open = (
   ): Promise<Protocol.State> => {
     await records(project, await tracker.list());
     const now: number = Date.now();
-    const expired: RunRow[] = db
-      .query<RawRunRow, [string, number]>(
-        "SELECT * FROM qa_runs WHERE project=? AND status='running' AND expires<=?",
+    const expired: ExpiredRun[] = db
+      .query<ExpiredRun, [string, number]>(
+        "SELECT id,note_id FROM qa_runs WHERE project=? AND status='running' AND expires<=?",
       )
-      .all(project, now)
-      .map(decode);
+      .all(project, now);
     for (const value of expired) {
       db.query(
         "UPDATE qa_runs SET status='expired' WHERE id=? AND status='running'",
       ).run(value.id);
+      if (value.note_id === null) continue;
       const card: Tracker.Card | null = await tracker.get(value.note_id);
       if (card)
         await tracker.update(card.id, {
@@ -441,7 +449,7 @@ export const open = (
     );
     const runs: RunRow[] = db
       .query<RawRunRow, [string, number]>(
-        "SELECT * FROM qa_runs WHERE project=? ORDER BY rowid DESC LIMIT ?",
+        "SELECT * FROM qa_runs WHERE project=? AND note_id IS NOT NULL ORDER BY rowid DESC LIMIT ?",
       )
       .all(project, HISTORY_LIMIT)
       .map(decode);

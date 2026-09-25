@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -159,6 +160,107 @@ const finding = (attachment: number): Protocol.Finding => ({
     scenario: "empty",
   },
   evidence: [attachment],
+});
+
+test("migration timestamps previously verified findings", () => {
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-migration-"));
+  folders.push(folder);
+  const database: Database = new Database(join(folder, "old.db"));
+  try {
+    database.exec(`
+      CREATE TABLE qa_findings (
+        project TEXT NOT NULL, fingerprint TEXT NOT NULL,
+        note_id INTEGER NOT NULL, test TEXT NOT NULL,
+        fix TEXT, last_result TEXT,
+        verified_through INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (project,fingerprint)
+      );
+      INSERT INTO qa_findings (project,fingerprint,note_id,test,verified_through)
+      VALUES ('sample','verified',1,'{}',1),('sample','open',2,'{}',0);
+    `);
+    State.prepare(database);
+    const verified = database
+      .query<{ verified_at: number }, []>(
+        "SELECT verified_at FROM qa_findings WHERE fingerprint='verified'",
+      )
+      .get();
+    const open = database
+      .query<{ verified_at: number }, []>(
+        "SELECT verified_at FROM qa_findings WHERE fingerprint='open'",
+      )
+      .get();
+    expect(verified?.verified_at).toBeGreaterThan(0);
+    expect(verified?.verified_at).toBeLessThan(Date.now());
+    expect(open?.verified_at).toBe(0);
+    State.prepare(database);
+    expect(
+      database
+        .query<{ verified_at: number }, []>(
+          "SELECT verified_at FROM qa_findings WHERE fingerprint='verified'",
+        )
+        .get(),
+    ).toEqual(verified);
+  } finally {
+    database.close();
+  }
+});
+
+test("migration repairs existing zero verification timestamps", () => {
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-migration-"));
+  folders.push(folder);
+  const database: Database = new Database(join(folder, "old.db"));
+  try {
+    database.exec(`
+      CREATE TABLE qa_findings (
+        project TEXT NOT NULL, fingerprint TEXT NOT NULL,
+        note_id INTEGER NOT NULL, test TEXT NOT NULL,
+        fix TEXT, last_result TEXT,
+        verified_through INTEGER NOT NULL DEFAULT 0,
+        verified_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (project,fingerprint)
+      );
+      INSERT INTO qa_findings (project,fingerprint,note_id,test,verified_through,verified_at)
+      VALUES ('sample','verified',1,'{}',1,0),('sample','open',2,'{}',0,0),
+        ('sample','dated',3,'{}',1,123);
+    `);
+    State.prepare(database);
+    const rows: { fingerprint: string; verified_at: number }[] = database
+      .query<{ fingerprint: string; verified_at: number }, []>(
+        "SELECT fingerprint,verified_at FROM qa_findings ORDER BY fingerprint",
+      )
+      .all();
+    expect(rows[0]).toEqual({ fingerprint: "dated", verified_at: 123 });
+    expect(rows[1]).toEqual({ fingerprint: "open", verified_at: 0 });
+    expect(rows[2]?.verified_at).toBeGreaterThan(0);
+    State.prepare(database);
+    expect(
+      database
+        .query<{ fingerprint: string; verified_at: number }, []>(
+          "SELECT fingerprint,verified_at FROM qa_findings ORDER BY fingerprint",
+        )
+        .all(),
+    ).toEqual(rows);
+  } finally {
+    database.close();
+  }
+});
+
+test("expired run without a card stays out of scheduling history", async () => {
+  const { state } = fixture();
+  state.db
+    .query(
+      "INSERT INTO qa_runs (id,project,mode,revision,scenario,expires,request) VALUES (?,?,?,?,?,?,?)",
+    )
+    .run("qa-no-card", "sample", "discover", revision, "empty", 0, "{}");
+  const current: Protocol.State = await state.state("sample");
+  expect(current.runs).toEqual([]);
+  expect(
+    state.db
+      .query<{ status: string }, []>(
+        "SELECT status FROM qa_runs WHERE id='qa-no-card'",
+      )
+      .get(),
+  ).toEqual({ status: "expired" });
 });
 
 test("run cards stay out of the issue catalog without tags", async () => {

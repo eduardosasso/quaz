@@ -94,6 +94,17 @@ const original: Review.Assessment = Review.assessmentSchema.parse({
   limitations: ["One image only"],
 });
 
+test("visual audit keeps comparison and no-peer fields consistent", () => {
+  const instruction: string = Audit.prompt("{}", {
+    design: original.design,
+    candidates: original.candidates,
+    limitations: original.limitations,
+  });
+  expect(instruction).toContain(
+    "when design.comparisons has an entry, set design.noPeers to null",
+  );
+});
+
 test("visual audit keeps existing candidates and accepts a revised design", () => {
   const result: Review.Assessment = Audit.merge(original, {
     design: {

@@ -10,7 +10,7 @@ type LegacyRun = {
   sequence: number;
   id: string;
   board_id: number;
-  note_id: number;
+  note_id: number | null;
   owner: string;
   project: string;
   mode: string;

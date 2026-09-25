@@ -4,6 +4,11 @@ import type { Browser, BrowserContext } from "playwright";
 import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
 
+const LOOPBACK_HOSTS: Set<string> = new Set([
+  "localhost",
+  "127.0.0.1",
+  "[::1]",
+]);
 const origin = z.url().refine((value: string): boolean => {
   const url: URL = new URL(value);
   return (
@@ -133,7 +138,15 @@ export const validate = (value: Prepared, project: Project): Prepared => {
   if (!value.entry.startsWith("/") || !value.ready.startsWith("/"))
     throw new Error("Invalid project adapter result");
 
-  const normalized: string = new URL(value.origin).origin;
+  const address: URL = new URL(value.origin);
+  if (
+    project.revision !== "target" &&
+    (address.protocol !== "http:" ||
+      !LOOPBACK_HOSTS.has(address.hostname) ||
+      !value.command.length)
+  )
+    throw new Error("Local project adapter requires loopback and a command");
+  const normalized: string = address.origin;
   if (
     project.revision === "target" &&
     (!project.deployment ||

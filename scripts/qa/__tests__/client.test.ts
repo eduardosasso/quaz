@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Client from "@qa/client";
@@ -346,6 +346,7 @@ test("imports a file-backed WAL database", async () => {
       .query("INSERT INTO qa_import (id,marker) VALUES (1,?)")
       .run("test-import");
     source.db.close();
+    chmodSync(file, 0o444);
     process.env.QUAZ_DB = file;
     process.env.QUAZ_BOOTSTRAP = "import";
     const first: Client.Client = await Client.open(
@@ -373,6 +374,8 @@ test("imports a file-backed WAL database", async () => {
     );
     await second.close?.();
   } finally {
+    const file: string = join(folder, "history.db");
+    if (await Bun.file(file).exists()) chmodSync(file, 0o644);
     if (previous === undefined) delete process.env.QUAZ_DB;
     else process.env.QUAZ_DB = previous;
     if (priorBootstrap === undefined) delete process.env.QUAZ_BOOTSTRAP;

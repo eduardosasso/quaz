@@ -158,7 +158,7 @@ export const open = async (
       original = bytes;
       writeFileSync(snapshot, bytes, { mode: 0o600 });
     } else if (process.env.QUAZ_BOOTSTRAP === "import" && existsSync(file)) {
-      const source: Database = new Database(file);
+      const source: Database = new Database(file, { readonly: true });
       try {
         if (!importMarker(source))
           throw new Error("QUAZ_DB needs the Quaz legacy import marker");

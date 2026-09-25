@@ -89,6 +89,38 @@ test("project adapter origin has no trailing slash", () => {
   ).toThrow("differs from target deployment");
 });
 
+test("local project adapter stays on loopback", () => {
+  const project: Project.Project = Project.schema.parse({
+    id: "sample",
+    sources: ["app.ts"],
+    scenarios: ["home"],
+    revision: "source",
+  });
+  const prepared: Project.Prepared = {
+    origin: "http://127.0.0.1:3000/",
+    entry: "/",
+    ready: "/",
+    storageState: { cookies: [], origins: [] },
+    command: ["bun", "app.ts"],
+    env: {},
+    metadata: {},
+  };
+  expect(Project.validate(prepared, project).origin).toBe(
+    "http://127.0.0.1:3000",
+  );
+  expect(
+    (): Project.Prepared =>
+      Project.validate(
+        { ...prepared, origin: "https://example.com/" },
+        project,
+      ),
+  ).toThrow("requires loopback");
+  expect(
+    (): Project.Prepared =>
+      Project.validate({ ...prepared, command: [] }, project),
+  ).toThrow("requires loopback");
+});
+
 test("project image extends a pinned Quaz base", () => {
   const project: Project.Project = Project.schema.parse({
     id: "sample",
