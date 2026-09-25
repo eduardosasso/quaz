@@ -22,10 +22,7 @@ import {
 const TIMEOUT_MS: number = 30_000;
 setDefaultTimeout(TIMEOUT_MS);
 
-const SYSTEM_CHROMIUM: string = "/usr/bin/chromium";
-const EXECUTABLE: string = existsSync(SYSTEM_CHROMIUM)
-  ? SYSTEM_CHROMIUM
-  : chromium.executablePath();
+const EXECUTABLE: string = "/usr/bin/chromium";
 const OUTSIDE_CONTROLS: number = 90;
 const MOBILE_SCALE: number = 3;
 const OVERFLOW_WIDTH: number = 600;

@@ -30,9 +30,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install Chromium
-        run: ./node_modules/.bin/playwright install --with-deps chromium
-
       - name: Lint
         run: |
           bun run lint
@@ -41,11 +38,14 @@ jobs:
       - name: Type-check
         run: bun run check
 
+      - name: Build Quaz image
+        run: bun --no-env-file -e 'import * as Image from "./scripts/qa/image.ts"; await Image.base()'
+
       - name: Test
         run: bun run test
 
-      - name: Build Quaz image
-        run: bun --no-env-file -e 'import * as Image from "./scripts/qa/image.ts"; await Image.base()'
+      - name: Test browser inspection in Quaz image
+        run: docker run --rm --entrypoint bun quaz:base --no-env-file test src/__tests__/qa-inspect.integration.test.ts
 
       - name: Check release tag
         if: startsWith(github.ref, 'refs/tags/v')
