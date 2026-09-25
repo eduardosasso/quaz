@@ -622,9 +622,9 @@ describe("QA orchestration boundaries", (): void => {
       };
       const validation: Review.Validation = {
         flowKey: assessment.flow.key,
-        status: "complete",
+        status: "partial",
         summary: "The unnamed button is reproduced",
-        coverage: { checked: [], unsupported: [] },
+        coverage: { checked: [], unsupported: ["design"] },
         steps: candidate.steps,
         evidence: ["validator/mobile.png"],
         results: [
@@ -700,11 +700,28 @@ describe("QA orchestration boundaries", (): void => {
         ids,
         { ticket: null, deployment: null, result: null },
       );
+      const blocked: Protocol.Finish = await Lifecycle.publication(
+        {
+          status: "partial",
+          audit: { status: "complete" },
+          assessment,
+          validation: { ...validation, status: "blocked" },
+          matching: published.matching,
+        },
+        run,
+        output,
+        ids,
+        { ticket: null, deployment: null, result: null },
+      );
       expect(held.status).toBe("partial");
       expect(held.summary).toContain("unpublished");
       expect(held.findings).toEqual([]);
       expect(held.report.unpublished).toHaveLength(1);
+      expect(blocked.status).toBe("partial");
+      expect(blocked.summary).toContain("validation is blocked");
+      expect(blocked.findings).toEqual([]);
       expect(published.findings).toHaveLength(1);
+      expect(published.status).toBe("partial");
       for (const snapshot of snapshots) {
         expect(uploaded).toContainEqual({ path: snapshot, mime: "text/plain" });
         expect(ids.has(snapshot)).toBe(true);

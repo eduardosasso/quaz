@@ -313,13 +313,23 @@ export const publication = async (
     await readFile(join(directory, "validator/events.jsonl"), "utf8"),
     validation,
   );
+  if (validation.status === "blocked")
+    return {
+      ...result(
+        "Independent validation is blocked; candidate findings remain unpublished.",
+        "none",
+        "partial",
+      ),
+      report,
+      evidence,
+    };
   const findings: Protocol.Finding[] = assessment.candidates.flatMap(
     (candidate): Protocol.Finding[] => {
       const confirmed = validation.results.find(
         (value): boolean =>
           value.candidateId === candidate.id && value.verdict === "confirmed",
       );
-      if (!confirmed || validation.status !== "complete") return [];
+      if (!confirmed) return [];
       const paths: string[] = [
         ...new Set([...candidate.evidence, ...confirmed.evidence]),
       ];

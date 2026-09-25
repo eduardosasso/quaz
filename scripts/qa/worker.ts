@@ -784,7 +784,7 @@ const reviews = async (
 
   let matching: Protocol.Matching | undefined;
   let matchingError: string | undefined;
-  if (findings.length && validation.status === "complete") {
+  if (findings.length && validation.status !== "blocked") {
     try {
       matching = await compare(
         findings.map(
