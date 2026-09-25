@@ -242,6 +242,25 @@ beforeEach(async (): Promise<void> => {
           arguments: { element: "Save" },
         },
       }),
+      ...[
+        "browser_navigate",
+        "browser_fill_form",
+        "browser_press_key",
+        "browser_navigate_back",
+        "browser_click",
+      ].map((tool: string): string =>
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            type: "mcp_tool_call",
+            server: "mobile",
+            tool,
+            status: "completed",
+            error: null,
+            arguments: {},
+          },
+        }),
+      ),
       JSON.stringify({
         type: "item.completed",
         item: {
@@ -599,7 +618,7 @@ describe("QA coverage", (): void => {
       }),
     );
     await expect(Review.assessment(complete(), root, root)).rejects.toThrow(
-      "successful browser interactions",
+      "distinct browser actions",
     );
   });
   test("empty technical data cannot establish completion", async (): Promise<void> => {
@@ -652,16 +671,17 @@ describe("QA coverage", (): void => {
       "another review",
     );
   });
-  test("measured interactions require browser evidence", async (): Promise<void> => {
+  test("measured interactions include browser evidence", async (): Promise<void> => {
     const value = complete();
     value.checks = value.checks.map((check) =>
       check.id === "recovery"
         ? { ...check, evidence: ["reviewer/mobile.png"] }
         : check,
     );
-    await expect(Review.assessment(value, root)).rejects.toThrow(
-      "browser interaction evidence",
-    );
+    const saved: Review.Assessment = await Review.assessment(value, root, root);
+    expect(
+      saved.checks.find((check): boolean => check.id === "recovery")?.evidence,
+    ).toContain("reviewer/events.jsonl");
   });
   test("complete requires review and independent validation", (): void => {
     expect(Review.coverage(complete(), validation()).status).toBe("complete");

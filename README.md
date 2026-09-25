@@ -24,7 +24,10 @@ The tracker adapter in `src/adapters/overdew.ts` sends ordinary card API request
 
 For example, a Quaz run can test RDLTR and create its finding card in Overdew. Another run can test Neologin or Surrge and use the same tracker adapter. Each tested app needs its own project config and target adapter. `examples/overdew` contains an optional target adapter for testing Overdew itself.
 
-The project config selects source files, a container adapter, scenarios, and deployment details. Quaz copies only listed sources into the image build context. Include all files needed to build the app. The default adapter reads `settings.command`, `settings.origin`, `settings.entry`, and `settings.ready`. It runs the app inside the container and checks it with Playwright. Use `settings.setup` for app data setup. The default Dockerfile expects a Bun app with `bun.lock` and a `build` script. Set `dockerfile` in the project config for another app stack.
+One Quaz image runs the controller and every worker. Run the target app separately, then set `revision` to `target` in its project config. Set `deployment.url` to a reachable revision endpoint and `deployment.revision` to its deployed commit. The endpoint must return that revision in an `x-quaz-revision` header on a `HEAD` request. Set `settings.origin` to the same origin, with `settings.entry` and `settings.ready` as paths within it. A custom adapter must return that same origin. Quaz checks the revision before, during, and after each run. Quaz does not need the target source or its image.
+Remote targets receive browser measurements without source files. The source detector reports unavailable for these runs.
+
+The older local source mode remains available for migration. It builds a Quaz image with app sources and starts the app inside each worker. New target integrations use the shared Quaz image.
 
 Use `--mode discover` for a guided review. The controller selects reported fixes for `--mode verify`. The current controller also keeps execution state in `QUAZ_DB`. Use one database per tracker board until the shared-state cutover is complete. The remaining state and recovery work is listed in `docs/extraction.md`.
 
@@ -36,4 +39,50 @@ bun --no-env-file run check
 bun --no-env-file run test
 ```
 
-Quaz creates cards with an idempotency key. The tracker must replay a matching request and reject a changed request. This lets Quaz retry publication after an interrupted API call.
+Quaz stores each new card ID before later API writes. The Overdew adapter uses a temporary title marker to recover a card when the create response is lost. Other tracker adapters must make card creation safe to retry with the supplied key.
+
+## Reviews and image releases
+
+Pull requests run lint, type checks, tests, and the shared Claude Code Review workflow. Merv reads those checks and can review the pull request when its GitHub App and repository allowlist include Quaz. `.merv.json` defines the same checks for Merv. It has no ship command.
+
+On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:sha-<full-commit-sha>`. Main must require passing validation, Claude review, and Merv checks before this workflow is merged. The image records the full source SHA and package version in OCI labels. Publication does not start Quaz or install a QA schedule.
+
+Run the **Plan version** workflow on `main` to select a stable SemVer bump from merged commits. Claude chooses major, minor, or patch and gives one reason. The workflow accepts an explicit override. A missing or invalid model answer stops the plan. Apply that plan in a normal pull request, then create an explicit `vX.Y.Z` Git tag on its merged commit. The tag workflow publishes that version tag only when it matches `package.json` and points to a commit on `main`.
+
+The shared Quaz image holds the QA tools, runner, and pinned Impeccable skill. The same image runs in controller and worker mode for every remote target. Each project config selects a target URL and QA scenarios. The extraction cutover gates remain in [draft PR #2](https://github.com/eduardosasso/quaz/pull/2).
+
+## Claude subscription token
+
+Quaz uses Claude Code for guided reviews. Run `claude setup-token` on a trusted machine. Put its output in `CLAUDE_CODE_OAUTH_TOKEN` in Quaz's 1Password Environment. The token lasts one year. Renew it before expiry. Do not put it in an image, project source, or `.env` file.
+
+The controller reads `QUAZ_TRACKER_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from Quaz's Environment at launch. It gives each worker a private token file under `/qa`. Only the Claude review process receives that token in its environment. Claude scrubs credentials from tool subprocesses. Raw Claude logs stay on the worker's temporary filesystem and are never tracker artifacts. The app server receives adapter-provided variables. The worker never receives the tracker or 1Password service token. Merv's Claude token remains separate.
+
+## Controller startup contract
+
+Build or pull the shared Quaz image. Set `QUAZ_BASE_IMAGE` to a registry image with an `@sha256:` digest to use a published image. The published image must match a clean Quaz checkout at the same commit. Keep the project config at the same absolute path on the Docker host and inside the controller. The target app runs separately and must be reachable from the worker's Docker network.
+
+The controller needs a project config and a controller config. The controller config names the project config, for example `{"project":"/absolute/path/to/project.json","mode":"auto"}`. Build the shared image before starting the controller:
+
+```sh
+project_dir=/absolute/path/to/project-config
+image=$(bun --no-env-file -e 'import * as Image from "./scripts/qa/image.ts"; console.log(await Image.base())')
+```
+
+Create an Overdew personal access token in Account settings. Store it as `QUAZ_TRACKER_TOKEN` in a Quaz 1Password Environment. Copy the Environment ID from 1Password Developer settings and pass it as `QUAZ_ENVIRONMENT`. A service account can reuse an existing token if it has access to this Environment. Pass `OP_SERVICE_ACCOUNT_TOKEN` from the host secret store at container start. Both values must be present together. The controller fails if the tracker token is missing after 1Password loads the Environment. For local checks, you can pass `QUAZ_TRACKER_TOKEN` directly without either 1Password value.
+
+```sh
+docker volume create quaz-state
+docker run --detach --name quaz-controller --restart unless-stopped \
+  --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+  --mount type=volume,src=quaz-state,dst=/qa \
+  --mount "type=bind,src=$project_dir,dst=$project_dir,readonly" \
+  --env OP_SERVICE_ACCOUNT_TOKEN \
+  --env QUAZ_ENVIRONMENT=oideewasrzxrhplsrtvqlozjna \
+  --env QUAZ_TRACKER_URL=https://your-tracker.example \
+  --env QUAZ_TRACKER_BOARD=owner/board \
+  "$image" controller --config "$project_dir/controller.json"
+```
+
+This command starts recurring QA work. Use it only after the extraction cutover checks pass. The controller has the Docker socket, so it must run on a trusted Docker host. It gives each worker only private `/qa` run subpaths and a per-run `/credential` token. The worker gets an ephemeral bridge token. It has no Docker socket, tracker token, or 1Password token. Quaz removes the worker and its token file after the run.
+
+Docker image builds receive only public version and revision arguments. They do not receive 1Password, tracker, or Claude credentials. GitHub Actions uses its temporary `GITHUB_TOKEN` to publish the shared image. Claude review and release planning use a separate `CLAUDE_CODE_OAUTH_TOKEN` in their jobs. Those tokens never enter the image build.

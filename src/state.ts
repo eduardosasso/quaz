@@ -17,6 +17,9 @@ const tags = (value: string): Set<string> =>
       .map((tag): string => tag.trim())
       .filter(Boolean),
   );
+const isRunCard = (card: Tracker.Card): boolean =>
+  /^QA (smoke|discover|verify): [a-z0-9_-]+$/.test(card.title) &&
+  /^Run qa-[a-zA-Z0-9_-]+\r?\n/.test(card.description);
 const conflict = (message: string): never => {
   throw new Error(message);
 };
@@ -37,6 +40,7 @@ type FindingRow = {
   fix: string | null;
   last_result: string | null;
   verified_through: number;
+  verified_at: number;
 };
 export type State = {
   db: Database;
@@ -68,7 +72,9 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
       revision TEXT NOT NULL, scenario TEXT NOT NULL, attention TEXT,
       status TEXT NOT NULL DEFAULT 'running', expires INTEGER NOT NULL,
       target INTEGER, snapshot INTEGER, receipt TEXT, request TEXT NOT NULL,
-      result TEXT, started INTEGER, publish TEXT, publish_lease INTEGER, publish_held TEXT
+      result TEXT, started INTEGER, publish TEXT, publish_lease INTEGER,
+      publish_held TEXT, publish_target_version INTEGER,
+      publish_target_step TEXT
     );
     CREATE TABLE IF NOT EXISTS qa_flows (
       project TEXT NOT NULL, key TEXT NOT NULL, goal TEXT NOT NULL,
@@ -79,6 +85,7 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
       project TEXT NOT NULL, fingerprint TEXT NOT NULL, note_id INTEGER NOT NULL,
       test TEXT NOT NULL, fix TEXT, last_result TEXT,
       verified_through INTEGER NOT NULL DEFAULT 0,
+      verified_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project,fingerprint)
     );
     CREATE TABLE IF NOT EXISTS qa_artifacts (
@@ -90,7 +97,39 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
       project TEXT PRIMARY KEY, run TEXT NOT NULL REFERENCES qa_runs(id),
       expires INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS qa_pending_findings (
+      run TEXT NOT NULL REFERENCES qa_runs(id), fingerprint TEXT NOT NULL,
+      note_id INTEGER NOT NULL, PRIMARY KEY (run,fingerprint)
+    );
+    CREATE TABLE IF NOT EXISTS qa_reopenings (
+      run TEXT NOT NULL REFERENCES qa_runs(id), note_id INTEGER NOT NULL,
+      PRIMARY KEY (run,note_id)
+    );
+    CREATE TABLE IF NOT EXISTS qa_create_intents (
+      run TEXT NOT NULL REFERENCES qa_runs(id), fingerprint TEXT NOT NULL,
+      key TEXT NOT NULL, PRIMARY KEY (run,fingerprint)
+    );
   `);
+  const findingColumns: Set<string> = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(qa_findings)")
+      .all()
+      .map((column): string => column.name),
+  );
+  if (!findingColumns.has("verified_at"))
+    db.exec(
+      "ALTER TABLE qa_findings ADD COLUMN verified_at INTEGER NOT NULL DEFAULT 0",
+    );
+  const columns: Set<string> = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(qa_runs)")
+      .all()
+      .map((column): string => column.name),
+  );
+  if (!columns.has("publish_target_version"))
+    db.exec("ALTER TABLE qa_runs ADD COLUMN publish_target_version INTEGER");
+  if (!columns.has("publish_target_step"))
+    db.exec("ALTER TABLE qa_runs ADD COLUMN publish_target_step TEXT");
   const run = (id: string): RunRow => {
     const value: RunRow | null = db
       .query<RunRow, [string]>("SELECT * FROM qa_runs WHERE id=?")
@@ -127,23 +166,27 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
         request,
       );
     const saved = db
-      .query<{ note_id: number | null }, [string]>(
-        "SELECT note_id FROM qa_runs WHERE id=?",
+      .query<{ note_id: number | null; started: number | null }, [string]>(
+        "SELECT note_id,started FROM qa_runs WHERE id=?",
       )
       .get(input.id);
-    if (!saved?.note_id) {
+    let noteId: number | null = saved?.note_id ?? null;
+    if (!noteId) {
       const card: Tracker.Card = await tracker.create(
         `QA ${input.mode}: ${input.project}`,
-        {
-          tags: `${Protocol.TAG.run},project:${input.project}`,
-          description: `Run ${input.id}\nMode: ${input.mode}\nProject: ${input.project}\nStatus: running\nRevision: ${input.revision}`,
-        },
         `quaz-run-${digest(input.id)}`,
       );
       db.query(
         "UPDATE qa_runs SET note_id=? WHERE id=? AND note_id IS NULL",
       ).run(card.id, input.id);
+      noteId = card.id;
     }
+    if (!saved?.started)
+      await tracker.update(noteId, {
+        title: `QA ${input.mode}: ${input.project}`,
+        tags: `${Protocol.TAG.run},project:${input.project}`,
+        description: `Run ${input.id}\nMode: ${input.mode}\nProject: ${input.project}\nStatus: running\nRevision: ${input.revision}`,
+      });
     return run(input.id);
   };
   const ready = (id: string): Protocol.Run =>
@@ -179,8 +222,8 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
     for (const entry of entries) {
       if (!entry || entry.project !== project) continue;
       found.set(entry.card, entry);
-      if (!entry.test) continue;
-      for (const fingerprint of entry.fingerprints)
+      for (const finding of entry.findings) {
+        if (!finding.test) continue;
         db.query(
           `INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result)
            VALUES (?,?,?,?,?,?) ON CONFLICT(project,fingerprint) DO UPDATE SET
@@ -188,12 +231,13 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
            last_result=excluded.last_result`,
         ).run(
           project,
-          fingerprint,
+          finding.fingerprint,
           entry.card,
-          JSON.stringify(entry.test),
-          entry.fix,
-          entry.lastResult,
+          JSON.stringify(finding.test),
+          finding.fix,
+          finding.lastResult,
         );
+      }
     }
 
     return found;
@@ -201,6 +245,58 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
   const catalog = async (project: string): Promise<Protocol.Catalog> => {
     const cards: Tracker.Card[] = await tracker.list();
     const saved: Map<number, Record.Record> = await records(project, cards);
+    for (const intent of db
+      .query<{ run: string; fingerprint: string; key: string }, []>(
+        "SELECT run,fingerprint,key FROM qa_create_intents",
+      )
+      .all()) {
+      const card: Tracker.Card | null = await tracker.recover(intent.key);
+      if (!card) continue;
+      db.transaction((): void => {
+        db.query(
+          "INSERT OR IGNORE INTO qa_pending_findings (run,fingerprint,note_id) VALUES (?,?,?)",
+        ).run(intent.run, intent.fingerprint, card.id);
+        db.query(
+          "DELETE FROM qa_create_intents WHERE run=? AND fingerprint=?",
+        ).run(intent.run, intent.fingerprint);
+      })();
+    }
+    const runs: Set<number> = new Set(
+      db
+        .query<{ note_id: number }, []>(
+          "SELECT note_id FROM qa_runs WHERE note_id IS NOT NULL",
+        )
+        .all()
+        .map((run): number => run.note_id),
+    );
+    const pending = db
+      .query<
+        {
+          run: string;
+          note_id: number;
+          fingerprint: string;
+          project: string;
+          status: string;
+          publish_lease: number | null;
+          publication_run: string | null;
+          publication_expires: number | null;
+        },
+        []
+      >(
+        "SELECT p.run,p.note_id,p.fingerprint,r.project,r.status,r.publish_lease,q.run AS publication_run,q.expires AS publication_expires FROM qa_pending_findings p JOIN qa_runs r ON r.id=p.run LEFT JOIN qa_publications q ON q.project=r.project",
+      )
+      .all();
+    const activePending: Set<number> = new Set(
+      pending
+        .filter(
+          (entry): boolean =>
+            entry.status === "publishing" &&
+            (entry.publish_lease ?? 0) > Date.now() &&
+            entry.publication_run === entry.run &&
+            (entry.publication_expires ?? 0) > Date.now(),
+        )
+        .map((entry): number => entry.note_id),
+    );
     const known: Map<number, { project: string; fingerprints: string[] }> =
       new Map();
     for (const entry of db
@@ -216,6 +312,17 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
           fingerprints: [entry.fingerprint],
         });
     }
+    for (const entry of pending) {
+      const current = known.get(entry.note_id);
+      if (current) {
+        if (!current.fingerprints.includes(entry.fingerprint))
+          current.fingerprints.push(entry.fingerprint);
+      } else
+        known.set(entry.note_id, {
+          project: entry.project,
+          fingerprints: [entry.fingerprint],
+        });
+    }
     const selected: Protocol.Catalog["cards"] = cards
       .filter((card): boolean => {
         const labels: Set<string> = tags(card.tags);
@@ -225,7 +332,10 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
         const managed = known.get(card.id);
         return (
           card.status !== DELETED &&
+          !runs.has(card.id) &&
+          !activePending.has(card.id) &&
           !labels.has(Protocol.TAG.run) &&
+          !isRunCard(card) &&
           (!managed || managed.project === project) &&
           (!projects.length || projects.includes(`project:${project}`))
         );
@@ -240,7 +350,9 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
         status: card.status,
         comments: card.comments,
         fingerprints:
-          saved.get(card.id)?.fingerprints ??
+          saved
+            .get(card.id)
+            ?.findings.map((entry): string => entry.fingerprint) ??
           known.get(card.id)?.fingerprints ??
           [],
       }));
@@ -387,7 +499,7 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
   };
   const fix = async (note: number, revision: string): Promise<void> => {
     if (!(await tracker.get(note))) throw new Error("QA card not found");
-    const row = db
+    const rows = db
       .query<
         {
           fix: string | null;
@@ -397,11 +509,12 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
         },
         [number]
       >(
-        "SELECT fix,project,fingerprint,test FROM qa_findings WHERE note_id=? ORDER BY rowid LIMIT 1",
+        "SELECT fix,project,fingerprint,test FROM qa_findings WHERE note_id=? ORDER BY rowid",
       )
-      .get(note);
-    if (!row) throw new Error("QA card not found");
-    if (row.fix !== revision) {
+      .all(note);
+    if (!rows.length) throw new Error("QA card not found");
+    if (rows.every((row): boolean => row.fix === revision)) return;
+    for (const row of rows)
       await Record.save(tracker, note, {
         project: row.project,
         fingerprint: row.fingerprint,
@@ -409,10 +522,9 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
         fix: revision,
         lastResult: null,
       });
-      db.query(
-        "UPDATE qa_findings SET fix=?,last_result=NULL WHERE note_id=?",
-      ).run(revision, note);
-    }
+    db.query(
+      "UPDATE qa_findings SET fix=?,last_result=NULL WHERE note_id=?",
+    ).run(revision, note);
   };
   const finding = (note: number): FindingRow | null =>
     db

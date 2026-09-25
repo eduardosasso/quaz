@@ -9,7 +9,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@qa/*": ["./scripts/qa/*"],
-      "@overdew/*": ["./examples/overdew/*"]
+      "@overdew/*": ["./examples/overdew/*"],
+      "@release": ["./scripts/release.ts"]
     }
   }
 }

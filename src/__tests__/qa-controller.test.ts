@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as Client from "@qa/client";
@@ -300,6 +300,10 @@ describe("QA Docker boundary", (): void => {
     Id: "controller",
     Image: `sha256:${"a".repeat(64)}`,
     Config: { Labels: { "app.qa.revision": REVISION } },
+    HostConfig: {
+      Mounts: [{ Type: "volume", Source: "qa-runtime", Target: "/qa" }],
+      Binds: null,
+    },
     Mounts: [
       { Type: "volume", Name: "qa-runtime", Destination: "/qa", RW: true },
     ],
@@ -335,6 +339,7 @@ describe("QA Docker boundary", (): void => {
           Id: "controller",
           Image: runtime.image,
           Config: { Labels: {} },
+          HostConfig: { Mounts: [], Binds: null },
           Mounts: [],
         }),
     ).toThrow("named volume");
@@ -348,89 +353,6 @@ describe("QA automatic publication recovery", (): void => {
   });
   afterAll(async (): Promise<void> => {
     await rm(directory, { recursive: true, force: true });
-  });
-  test("credential conflict preserves the host update and publishes reports", async (): Promise<void> => {
-    const root: string = join(directory, "temporary-conflict");
-    const path: string = join(root, "run");
-    const credential: string = join(root, "credential-0");
-    const auth: string = join(directory, "host-auth.json");
-    await mkdir(join(path, "output"), { recursive: true });
-    await mkdir(credential);
-    await writeFile(auth, "new host value");
-    await writeFile(`${credential}.initial`, "old value");
-    await writeFile(join(credential, "auth.json"), "worker renewal");
-    const original: Protocol.Run = run(NOW, {
-      status: "running",
-      receipt: null,
-    });
-    await Runner.journal(
-      path,
-      JSON.stringify({
-        isolated: true,
-        run: {
-          id: original.id,
-          project: original.project,
-          mode: original.mode,
-          revision: original.revision,
-          scenario: original.scenario,
-        },
-        error: "Interrupted",
-      }),
-    );
-    let finishes: number = 0;
-    const artifacts: string[] = [];
-    const client: Client.Client = {
-      comments: async (): Promise<string[]> => [],
-      request: async <T>(endpoint: string): Promise<T> => {
-        if (endpoint === "/runs") return original as T;
-        finishes++;
-        return { run: { ...original, receipt: "done", status: "failed" } } as T;
-      },
-      upload: async (
-        _run: string,
-        artifact: string,
-        bytes: Uint8Array,
-      ): Promise<number> => {
-        artifacts.push(artifact);
-        expect(new TextDecoder().decode(bytes)).not.toContain("worker renewal");
-        expect(new TextDecoder().decode(bytes)).not.toContain("new host value");
-        return 1;
-      },
-    };
-    await expect(
-      Controller.recovery(client, directory, {
-        ...Runner.options(["--project", PROJECT_FILE]),
-        auth,
-      }),
-    ).rejects.toThrow("newer credentials were preserved");
-    expect(finishes).toBe(1);
-    expect(artifacts).toEqual(["credential-error.json"]);
-    expect(await readFile(auth, "utf8")).toBe("new host value");
-    expect(existsSync(root)).toBe(false);
-  });
-  test("renewed credentials survive restart", async (): Promise<void> => {
-    const root: string = join(directory, "temporary-renewal");
-    const credential: string = join(root, "credential-0");
-    const auth: string = join(directory, "renewed-auth.json");
-    await mkdir(credential, { recursive: true });
-    await writeFile(auth, "old value");
-    await writeFile(`${credential}.initial`, "old value");
-    await writeFile(join(credential, "auth.json"), "new value");
-    const client: Client.Client = {
-      comments: async (): Promise<string[]> => [],
-      request: async <T>(): Promise<T> => {
-        throw new Error("No request");
-      },
-      upload: async (): Promise<number> => {
-        throw new Error("No upload");
-      },
-    };
-    await Controller.recovery(client, directory, {
-      ...Runner.options(["--project", PROJECT_FILE]),
-      auth,
-    });
-    expect(await readFile(auth, "utf8")).toBe("new value");
-    expect(existsSync(root)).toBe(false);
   });
   test("lost finish response reuses the original run and preserves pending evidence", async (): Promise<void> => {
     const path: string = join(directory, "temporary-one", "run");

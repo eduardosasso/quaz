@@ -12,6 +12,8 @@ export type Runtime = {
   network: string;
   owner: string;
 };
+export const user = (uid: number, gid: number): { uid: number; gid: number } =>
+  uid === 0 ? { uid: CONFIG.workerUid, gid: CONFIG.workerGid } : { uid, gid };
 export const command = async (args: string[]): Promise<string> => {
   const child = Bun.spawn(["docker", ...args], {
     stdout: "pipe",
@@ -32,6 +34,18 @@ const description = z.object({
   Id: z.string(),
   Image: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   Config: z.object({ Labels: z.record(z.string(), z.string()).nullable() }),
+  HostConfig: z.object({
+    Mounts: z
+      .array(
+        z.object({
+          Type: z.string(),
+          Source: z.string().optional(),
+          Target: z.string(),
+        }),
+      )
+      .nullable(),
+    Binds: z.array(z.string()).nullable(),
+  }),
   Mounts: z.array(
     z.object({
       Type: z.string(),
@@ -43,10 +57,29 @@ const description = z.object({
 });
 export const runtime = (value: unknown): Runtime => {
   const self = description.parse(value);
+  const named = (name: string, destination: string): boolean =>
+    Boolean(
+      self.HostConfig.Mounts?.some(
+        (item): boolean =>
+          item.Type === "volume" &&
+          item.Source === name &&
+          item.Target === destination,
+      ) ||
+        self.HostConfig.Binds?.some(
+          (item): boolean =>
+            item === `${name}:${destination}` ||
+            item.startsWith(`${name}:${destination}:`),
+        ),
+    );
   const mount = self.Mounts.find(
     (item): boolean => item.Destination === CONFIG.controller.directory,
   );
-  if (mount?.Type !== "volume" || !mount.Name || !mount.RW)
+  if (
+    mount?.Type !== "volume" ||
+    !mount.Name ||
+    !mount.RW ||
+    !named(mount.Name, CONFIG.controller.directory)
+  )
     throw new Error(
       `Controller requires a writable named volume at ${CONFIG.controller.directory}`,
     );
@@ -137,4 +170,39 @@ export const network = async (value: Runtime): Promise<void> => {
       value.network,
       self,
     ]);
+};
+export const connected = (value: unknown): number => {
+  const parsed = z
+    .array(
+      z.object({
+        Containers: z.record(z.string(), z.unknown()).nullable(),
+      }),
+    )
+    .min(1)
+    .parse(value);
+
+  return Object.keys(parsed[0].Containers ?? {}).length;
+};
+export const release = async (value: Runtime): Promise<void> => {
+  await command([
+    "network",
+    "disconnect",
+    value.network,
+    process.env.HOSTNAME ?? "",
+  ]);
+  const remaining: number = connected(
+    JSON.parse(await command(["network", "inspect", value.network])),
+  );
+  if (remaining) {
+    console.log(
+      JSON.stringify({
+        event: "network-retained",
+        network: value.network,
+        reason: "target-containers-attached",
+        remaining,
+      }),
+    );
+    return;
+  }
+  await command(["network", "rm", value.network]);
 };

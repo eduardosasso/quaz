@@ -8,9 +8,11 @@ const DELETED: number = 2;
 const COMPLETED: number = 1;
 const ARCHIVED: number = 3;
 const COMMENT_MAX: number = 4000;
-const PUBLISH_LEASE_MS: number = 10 * 60 * 1000;
+const MILLISECONDS: number = 1000;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const commentDigest = (value: string): string =>
+  digest(value.replace(/\r\n?/g, "\n"));
 const tags = (value: string): Set<string> =>
   new Set(
     value
@@ -43,11 +45,14 @@ const attach = async (
   run: string,
   target: number,
   ids: number[],
+  apply?: (action: string, change: () => Promise<unknown>) => Promise<void>,
+  guard?: () => void,
 ): Promise<number[]> => {
   const existing: Tracker.Attachment[] =
     await state.tracker.attachments(target);
   const result: number[] = [];
   for (const id of ids) {
+    guard?.();
     const source = state.db
       .query<{ path: string; digest: string; mime: string }, [string, number]>(
         "SELECT path,digest,mime FROM qa_artifacts WHERE run=? AND attachment=?",
@@ -68,12 +73,17 @@ const attach = async (
     const bytes: Uint8Array = await state.tracker.download(id);
     if (createHash("sha256").update(bytes).digest("hex") !== source.digest)
       fail("QA evidence changed after upload");
-    const added: Tracker.Attachment = await state.tracker.upload(
-      target,
-      name,
-      bytes,
-      source.mime,
-    );
+    let added: Tracker.Attachment;
+    if (apply) {
+      await apply(`attachment:${name}`, async (): Promise<void> => {
+        await state.tracker.upload(target, name, bytes, source.mime);
+      });
+      const uploaded: Tracker.Attachment | undefined = (
+        await state.tracker.attachments(target)
+      ).find((item): boolean => item.name === name);
+      if (!uploaded) throw new Error("QA evidence upload is unavailable");
+      added = uploaded;
+    } else added = await state.tracker.upload(target, name, bytes, source.mime);
     existing.push(added);
     result.push(added.id);
   }
@@ -88,7 +98,10 @@ const comment = async (
   note: number,
   body: string,
   runCard: number,
+  apply?: (action: string, change: () => Promise<unknown>) => Promise<void>,
+  guard?: () => void,
 ): Promise<void> => {
+  guard?.();
   const overflow: string = `\nFull report: QA run card ${runCard}.`;
   const text: string =
     body.length > COMMENT_MAX
@@ -96,7 +109,67 @@ const comment = async (
       : body;
   const target: Tracker.Card | null = await state.tracker.get(note);
   if (!target) throw new Error("QA comment card is unavailable");
-  if (!target.comments.includes(text)) await state.tracker.comment(note, text);
+  if (
+    !target.comments.some(
+      (body): boolean => commentDigest(body) === commentDigest(text),
+    )
+  ) {
+    if (apply)
+      await apply(`comment:${commentDigest(text)}`, async (): Promise<void> => {
+        await state.tracker.comment(note, text);
+      });
+    else await state.tracker.comment(note, text);
+  }
+};
+const actionMatches = async (
+  state: State.State,
+  step: string,
+  card: Tracker.Card,
+): Promise<boolean> => {
+  if (step.startsWith("attachment:"))
+    return (await state.tracker.attachments(card.id)).some(
+      (item): boolean => item.name === step.slice("attachment:".length),
+    );
+  if (step.startsWith("comment:"))
+    return card.comments.some(
+      (body): boolean => commentDigest(body) === step.slice("comment:".length),
+    );
+  const labels: Set<string> = tags(card.tags);
+  if (step === "pass")
+    return (
+      labels.has(Protocol.TAG.verified) &&
+      !labels.has(Protocol.TAG.pending) &&
+      !labels.has(Protocol.TAG.attention)
+    );
+  if (step === "reopen") return card.status === 0;
+  if (step === "fail")
+    return (
+      labels.has(Protocol.TAG.pending) && !labels.has(Protocol.TAG.verified)
+    );
+  if (step === "blocked") return labels.has(Protocol.TAG.attention);
+
+  throw new Error("Unknown verification action");
+};
+const issueCard = (
+  finding: Protocol.Finding,
+  run: Protocol.Run,
+): { description: string; changes: Tracker.Changes } => {
+  const description: string = `${finding.impact}\n\nSteps:\n${finding.test.steps.map((step, index): string => `${index + 1}. ${step}`).join("\n")}\n\nExpected: ${finding.test.expected}\nActual: ${finding.actual}\n\nRoute: ${finding.test.route}\nScenario: ${finding.test.scenario}\nSource revision: ${run.revision}\nQA run: ${run.id}`;
+  const checklist: string = JSON.stringify(
+    (finding.test.acceptance ?? [finding.test.expected]).map(
+      (text): { text: string; done: boolean } => ({ text, done: false }),
+    ),
+  );
+
+  return {
+    description,
+    changes: {
+      title: finding.title,
+      tags: `${Protocol.TAG.issue},${Protocol.TAG.pending},project:${run.project}`,
+      description,
+      checklist,
+    },
+  };
 };
 const match = async (
   state: State.State,
@@ -172,7 +245,7 @@ export const publish = async (
   id: string,
   input: Protocol.Finish,
 ): Promise<Result> => {
-  const run: Protocol.Run = state.run(id);
+  const run: ReturnType<State.State["run"]> = state.run(id);
   const receipt: string = digest(input);
   if (run.receipt) {
     if (run.receipt !== receipt) fail("QA run already has a different result");
@@ -200,9 +273,13 @@ export const publish = async (
         publish: string | null;
         publish_lease: number | null;
         publish_held: string | null;
+        publish_target_version: number | null;
+        publish_target_step: string | null;
       },
       [string]
-    >("SELECT publish,publish_lease,publish_held FROM qa_runs WHERE id=?")
+    >(
+      "SELECT publish,publish_lease,publish_held,publish_target_version,publish_target_step FROM qa_runs WHERE id=?",
+    )
     .get(id);
   if (pending?.publish && pending.publish !== receipt)
     fail("QA run is publishing a different result");
@@ -216,11 +293,36 @@ export const publish = async (
   if (run.mode !== "verify" && input.verdict !== "none")
     fail("Only verification can change a card");
   const expired: boolean = run.expires <= Date.now();
-  const held: string | null = pending?.publish
+  let held: string | null = pending?.publish
     ? (pending.publish_held ?? null)
     : run.mode === "discover" && !expired
       ? await match(state, run, input)
       : null;
+  const refresh = (): boolean => {
+    const now: number = Date.now();
+    if (run.expires <= now) return false;
+    const lease = state.db
+      .query(
+        "UPDATE qa_publications SET expires=MIN(?,?) WHERE project=? AND run=? AND expires>?",
+      )
+      .run(
+        run.expires,
+        now + Protocol.PUBLICATION_SECONDS * MILLISECONDS,
+        run.project,
+        id,
+        now,
+      );
+
+    return lease.changes === 1;
+  };
+  if (run.mode === "discover" && input.findings.length && !held && !expired) {
+    if (!refresh())
+      held =
+        "Publication lease expired. Findings remain unpublished and require a fresh duplicate review.";
+  }
+  const renew = (): void => {
+    if (!refresh()) fail("Discovery publication lease expired");
+  };
   if (run.mode === "verify" && ["pass", "fail"].includes(input.verdict)) {
     const finding = run.target ? state.finding(run.target) : null;
     const proof = input.deployment;
@@ -237,17 +339,46 @@ export const publish = async (
   }
   state.db
     .query(
-      "UPDATE qa_runs SET status='publishing',publish=?,publish_lease=?,publish_held=? WHERE id=?",
+      "UPDATE qa_runs SET status='publishing',publish=?,publish_lease=?,publish_held=?,publish_target_version=COALESCE(publish_target_version,?) WHERE id=?",
     )
-    .run(receipt, Date.now() + PUBLISH_LEASE_MS, held, id);
+    .run(
+      receipt,
+      Date.now() + Protocol.PUBLICATION_SECONDS * MILLISECONDS,
+      held,
+      run.snapshot,
+      id,
+    );
   try {
     const cards: number[] = [];
     const created: number[] = [];
     let status: string = held ? "partial" : input.status;
     if (run.mode === "verify" && input.verdict !== "none") {
-      const target: Tracker.Card | null = run.target
+      let target: Tracker.Card | null = run.target
         ? await state.tracker.get(run.target)
         : null;
+      let step: string | null = pending?.publish_target_step ?? null;
+      if (
+        pending?.publish &&
+        step &&
+        !step.endsWith(":done") &&
+        target &&
+        target.version ===
+          (pending.publish_target_version ?? run.snapshot ?? -1) + 1 &&
+        (await actionMatches(state, step, target))
+      ) {
+        state.db
+          .query(
+            "UPDATE qa_runs SET publish_target_version=?,publish_target_step=? WHERE id=?",
+          )
+          .run(target.version, `${step}:done`, id);
+        step = `${step}:done`;
+      }
+      const version: number | null =
+        state.db
+          .query<{ publish_target_version: number | null }, [string]>(
+            "SELECT publish_target_version FROM qa_runs WHERE id=?",
+          )
+          .get(id)?.publish_target_version ?? null;
       const owned = state.db
         .query(
           "SELECT 1 FROM qa_flows WHERE project=? AND key=? AND run=? AND expires>?",
@@ -255,45 +386,65 @@ export const publish = async (
         .get(run.project, `ticket-${run.target}`, id, Date.now());
       const valid: boolean = Boolean(
         target &&
-          target.version === run.snapshot &&
-          [COMPLETED, ARCHIVED].includes(target.status) &&
-          tags(target.tags).has(Protocol.TAG.pending) &&
+          (pending?.publish
+            ? target.version === version
+            : target.version === run.snapshot &&
+              [COMPLETED, ARCHIVED].includes(target.status) &&
+              tags(target.tags).has(Protocol.TAG.pending)) &&
           target.status !== DELETED &&
           owned &&
           !expired,
       );
       if (!valid) status = "superseded";
       else if (target) {
+        const targetId: number = target.id;
+        const apply = async (
+          action: string,
+          change: () => Promise<unknown>,
+        ): Promise<void> => {
+          if (step === `${action}:done`) return;
+          if (action === "reopen" && (step === "fail" || step === "fail:done"))
+            return;
+          const before: Tracker.Card | null = await state.tracker.get(targetId);
+          if (!before)
+            throw new Error("QA card is unavailable during publication");
+          const expected: number | null =
+            state.db
+              .query<{ publish_target_version: number | null }, [string]>(
+                "SELECT publish_target_version FROM qa_runs WHERE id=?",
+              )
+              .get(id)?.publish_target_version ?? null;
+          if (before.version !== expected)
+            throw new Error("Verification card changed during publication");
+          state.db
+            .query("UPDATE qa_runs SET publish_target_step=? WHERE id=?")
+            .run(action, id);
+          step = action;
+          await change();
+          const after: Tracker.Card | null = await state.tracker.get(targetId);
+          if (
+            !after ||
+            after.version !== before.version + 1 ||
+            !(await actionMatches(state, action, after))
+          )
+            throw new Error("Verification card changed during publication");
+          state.db
+            .query(
+              "UPDATE qa_runs SET publish_target_version=?,publish_target_step=? WHERE id=?",
+            )
+            .run(after.version, `${action}:done`, id);
+          step = `${action}:done`;
+          target = after;
+        };
         const finding = state.finding(target.id);
         const proof = input.deployment;
         const copied: number[] = await attach(
           state,
           id,
-          target.id,
+          targetId,
           input.evidence,
+          apply,
         );
-        if (input.verdict === "pass") {
-          await state.tracker.update(target.id, {
-            tagsAdd: Protocol.TAG.verified,
-            tagsRemove: `${Protocol.TAG.pending},${Protocol.TAG.attention}`,
-          });
-          state.db
-            .query(
-              "UPDATE qa_findings SET verified_through=(SELECT MAX(rowid) FROM qa_runs) WHERE note_id=?",
-            )
-            .run(target.id);
-        }
-        if (input.verdict === "fail") {
-          await state.tracker.reopen(target.id);
-          await state.tracker.update(target.id, {
-            tagsAdd: Protocol.TAG.pending,
-            tagsRemove: Protocol.TAG.verified,
-          });
-        }
-        if (input.verdict === "blocked")
-          await state.tracker.update(target.id, {
-            tagsAdd: Protocol.TAG.attention,
-          });
         const signature: string = digest({
           verdict: input.verdict,
           summary: input.summary,
@@ -301,26 +452,73 @@ export const publish = async (
         });
         if (input.verdict === "fail" || signature !== finding?.last_result) {
           const report: string = `QA ${input.verdict}\nRun: ${id}\n${proof ? `Deployed and tested revision: ${proof.tested}\n` : ""}${links(state, copied)}\n${input.summary}`;
-          await comment(state, target.id, report, run.note_id);
-          await Record.save(state.tracker, target.id, {
-            project: run.project,
-            fingerprint: finding?.fingerprint,
-            test: finding
-              ? Protocol.caseSchema.parse(JSON.parse(finding.test))
-              : undefined,
-            fix: finding?.fix,
-            lastResult: signature,
-          });
+          await comment(state, targetId, report, run.note_id, apply);
           state.db
             .query("UPDATE qa_findings SET last_result=? WHERE note_id=?")
             .run(signature, target.id);
         }
+        if (input.verdict === "pass") {
+          await apply(
+            "pass",
+            async (): Promise<Tracker.Card> =>
+              state.tracker.update(targetId, {
+                tagsAdd: Protocol.TAG.verified,
+                tagsRemove: `${Protocol.TAG.pending},${Protocol.TAG.attention}`,
+              }),
+          );
+          state.db
+            .query(
+              "UPDATE qa_findings SET verified_through=(SELECT rowid FROM qa_runs WHERE id=?),verified_at=? WHERE note_id=?",
+            )
+            .run(id, Date.now(), target.id);
+        }
+        if (input.verdict === "fail") {
+          await apply(
+            "reopen",
+            async (): Promise<void> => state.tracker.reopen(targetId),
+          );
+          await apply(
+            "fail",
+            async (): Promise<Tracker.Card> =>
+              state.tracker.update(targetId, {
+                tagsAdd: Protocol.TAG.pending,
+                tagsRemove: Protocol.TAG.verified,
+              }),
+          );
+        }
+        if (input.verdict === "blocked") {
+          await apply(
+            "blocked",
+            async (): Promise<Tracker.Card> =>
+              state.tracker.update(targetId, {
+                tagsAdd: Protocol.TAG.attention,
+              }),
+          );
+        }
+        if (finding)
+          await Record.save(
+            state.tracker,
+            targetId,
+            {
+              project: run.project,
+              fingerprint: finding.fingerprint,
+              test: Protocol.caseSchema.parse(JSON.parse(finding.test)),
+              fix: finding.fix,
+              lastResult: signature,
+            },
+            async (name: string, bytes: Uint8Array): Promise<void> => {
+              await apply(`attachment:${name}`, async (): Promise<void> => {
+                await state.tracker.upload(targetId, name, bytes, Record.MIME);
+              });
+            },
+          );
         cards.push(target.id);
       }
     }
     const destinations: Map<string, number> = new Map();
     if (run.mode === "discover" && !expired && !held)
       for (const choice of input.matching?.decisions ?? []) {
+        renew();
         const finding: Protocol.Finding | undefined = input.findings.find(
           (entry): boolean => entry.fingerprint === choice.fingerprint,
         );
@@ -336,12 +534,21 @@ export const publish = async (
           choice.verdict === "same-run"
             ? destinations.get(choice.sameAs ?? "")
             : (choice.target ?? undefined);
+        const staged = state.db
+          .query<{ note_id: number }, [string, string]>(
+            "SELECT note_id FROM qa_pending_findings WHERE run=? AND fingerprint=?",
+          )
+          .get(id, finding.fingerprint);
         const stale = state.db
           .query<{ note_id: number }, [string, string]>(
             "SELECT note_id FROM qa_findings WHERE project=? AND fingerprint=?",
           )
           .get(run.project, finding.fingerprint);
-        if (stale && stale.note_id !== target) {
+        if (
+          stale &&
+          stale.note_id !== target &&
+          stale.note_id !== staged?.note_id
+        ) {
           const old = await state.tracker.get(stale.note_id);
           if (old && old.status !== DELETED)
             fail("Finding identity belongs to an existing card");
@@ -349,24 +556,30 @@ export const publish = async (
             .query("DELETE FROM qa_findings WHERE project=? AND fingerprint=?")
             .run(run.project, finding.fingerprint);
         }
+        const draft = issueCard(finding, run);
         if (target) {
           const prior: Tracker.Card | null = await state.tracker.get(target);
           if (!prior || prior.status === DELETED)
             throw new Error("Duplicate card is unavailable");
-          const managed = state.finding(target);
+          const abandoned = state.db
+            .query(
+              "SELECT 1 FROM qa_pending_findings WHERE note_id=? AND run<>?",
+            )
+            .get(target, id);
+          if (abandoned && !tags(prior.tags).has(Protocol.TAG.issue)) {
+            renew();
+            await state.tracker.update(target, draft.changes);
+          }
           const copied: number[] = await attach(
             state,
             id,
             target,
             finding.evidence,
+            undefined,
+            renew,
           );
-          await Record.save(state.tracker, target, {
-            project: run.project,
-            fingerprint: finding.fingerprint,
-            test: finding.test,
-            fix: managed?.fix,
-            lastResult: managed?.last_result,
-          });
+          renew();
+          const managed = state.finding(target);
           state.db
             .query(
               "INSERT OR IGNORE INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
@@ -382,72 +595,116 @@ export const publish = async (
               tagsAdd: `${Protocol.TAG.issue},${Protocol.TAG.pending},project:${run.project}`,
             });
           const newer = state.db
-            .query<{ verified_through: number }, [number]>(
-              "SELECT verified_through FROM qa_findings WHERE note_id=?",
+            .query<{ verified_through: number; verified_at: number }, [number]>(
+              "SELECT verified_through,verified_at FROM qa_findings WHERE note_id=?",
             )
             .get(target);
-          const sequence =
-            state.db
-              .query<{ seq: number }, [string]>(
-                "SELECT rowid AS seq FROM qa_runs WHERE id=?",
-              )
-              .get(id)?.seq ?? 0;
-          const closed: boolean =
+          const wasClosed: boolean =
             [COMPLETED, ARCHIVED].includes(prior.status) ||
             tags(prior.tags).has(Protocol.TAG.verified);
-          if (closed && (newer?.verified_through ?? 0) < sequence) {
-            await state.tracker.reopen(target);
-            await state.tracker.update(target, {
-              tagsAdd: Protocol.TAG.pending,
-              tagsRemove: `${Protocol.TAG.verified},${Protocol.TAG.attention}`,
-            });
-            await Record.save(state.tracker, target, {
-              project: run.project,
-              fingerprint: finding.fingerprint,
-              fix: null,
-              lastResult: null,
-            });
+          const stale: boolean = Boolean(
+            newer?.verified_through &&
+              (!newer.verified_at || (run.started ?? 0) <= newer.verified_at),
+          );
+          if (wasClosed && !stale) {
+            renew();
+            state.db.transaction((): void => {
+              state.db
+                .query(
+                  "INSERT OR IGNORE INTO qa_reopenings (run,note_id) VALUES (?,?)",
+                )
+                .run(id, target);
+              state.db
+                .query(
+                  "UPDATE qa_findings SET fix=NULL,last_result=NULL WHERE note_id=?",
+                )
+                .run(target);
+            })();
+          }
+          const closed: boolean = Boolean(
             state.db
-              .query(
-                "UPDATE qa_findings SET fix=NULL,last_result=NULL WHERE note_id=?",
-              )
-              .run(target);
+              .query("SELECT 1 FROM qa_reopenings WHERE run=? AND note_id=?")
+              .get(id, target),
+          );
+          if (closed) {
+            if ([COMPLETED, ARCHIVED].includes(prior.status)) {
+              renew();
+              await state.tracker.reopen(target);
+            }
+            if (
+              !tags(prior.tags).has(Protocol.TAG.pending) ||
+              tags(prior.tags).has(Protocol.TAG.verified) ||
+              tags(prior.tags).has(Protocol.TAG.attention)
+            ) {
+              renew();
+              await state.tracker.update(target, {
+                tagsAdd: Protocol.TAG.pending,
+                tagsRemove: `${Protocol.TAG.verified},${Protocol.TAG.attention}`,
+              });
+            }
           }
           const report: string = `QA ${closed ? "reproduces this issue again" : "adds supporting evidence"}.\nRun: ${id}\n${links(state, copied)}\nTested revision: ${run.revision}\nActual: ${finding.actual}\nExpected: ${finding.test.expected}\nMatch: ${choice.reason}`;
-          await comment(state, target, report, run.note_id);
+          await comment(state, target, report, run.note_id, undefined, renew);
+          const recorded = state.finding(target);
+          await Record.save(state.tracker, target, {
+            project: run.project,
+            fingerprint: finding.fingerprint,
+            test: finding.test,
+            fix: recorded?.fix,
+            lastResult: recorded?.last_result,
+          });
           destinations.set(finding.fingerprint, target);
           if (!cards.includes(target)) cards.push(target);
           continue;
         }
-        const description: string = `${finding.impact}\n\nSteps:\n${finding.test.steps.map((step, index): string => `${index + 1}. ${step}`).join("\n")}\n\nExpected: ${finding.test.expected}\nActual: ${finding.actual}\n\nRoute: ${finding.test.route}\nScenario: ${finding.test.scenario}\nSource revision: ${run.revision}\nQA run: ${id}`;
-        const checklist: string = JSON.stringify(
-          (finding.test.acceptance ?? [finding.test.expected]).map(
-            (text): { text: string; done: boolean } => ({ text, done: false }),
-          ),
-        );
-        const note: Tracker.Card = await state.tracker.create(
-          finding.title,
-          {
-            tags: `${Protocol.TAG.issue},${Protocol.TAG.pending},project:${run.project}`,
-            description,
-            checklist,
-          },
-          `quaz-finding-${digest(`${run.project}:${finding.fingerprint}:${run.id}`)}`,
-        );
+        let noteId: number | undefined = staged?.note_id;
+        if (!noteId) {
+          const key: string = `quaz-finding-${digest(`${run.project}:${finding.fingerprint}`)}`;
+          renew();
+          state.db
+            .query(
+              "INSERT OR IGNORE INTO qa_create_intents (run,fingerprint,key) VALUES (?,?,?)",
+            )
+            .run(id, finding.fingerprint, key);
+          const note: Tracker.Card = await state.tracker.create(
+            finding.title,
+            key,
+          );
+          noteId = note.id;
+          renew();
+          state.db.transaction((): void => {
+            state.db
+              .query(
+                "INSERT OR IGNORE INTO qa_pending_findings (run,fingerprint,note_id) VALUES (?,?,?)",
+              )
+              .run(id, finding.fingerprint, note.id);
+            state.db
+              .query(
+                "DELETE FROM qa_create_intents WHERE run=? AND fingerprint=?",
+              )
+              .run(id, finding.fingerprint);
+          })();
+        }
+        renew();
+        await state.tracker.update(noteId, draft.changes);
         const copied: number[] = await attach(
           state,
           id,
-          note.id,
+          noteId,
           finding.evidence,
+          undefined,
+          renew,
         );
-        await state.tracker.update(note.id, {
-          description: `${description}\n\n${links(state, copied)}`,
+        renew();
+        await state.tracker.update(noteId, {
+          description: `${draft.description}\n\n${links(state, copied)}`,
         });
-        await Record.save(state.tracker, note.id, {
+        await Record.save(state.tracker, noteId, {
           project: run.project,
           fingerprint: finding.fingerprint,
           test: finding.test,
         });
+        renew();
         state.db
           .query(
             "INSERT OR IGNORE INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
@@ -455,12 +712,12 @@ export const publish = async (
           .run(
             run.project,
             finding.fingerprint,
-            note.id,
+            noteId,
             JSON.stringify(finding.test),
           );
-        destinations.set(finding.fingerprint, note.id);
-        cards.push(note.id);
-        created.push(note.id);
+        destinations.set(finding.fingerprint, noteId);
+        cards.push(noteId);
+        created.push(noteId);
       }
     if (expired) status = "superseded";
     await state.tracker.update(run.note_id, {
@@ -487,6 +744,8 @@ export const publish = async (
       state.db
         .query("DELETE FROM qa_publications WHERE project=? AND run=?")
         .run(run.project, id);
+      state.db.query("DELETE FROM qa_pending_findings WHERE run=?").run(id);
+      state.db.query("DELETE FROM qa_reopenings WHERE run=?").run(id);
     })();
     return {
       run: state.run(id),

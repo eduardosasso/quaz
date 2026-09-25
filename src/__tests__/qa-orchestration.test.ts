@@ -1,12 +1,5 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import * as Client from "@qa/client";
@@ -106,67 +99,6 @@ describe("QA orchestration boundaries", (): void => {
     expect(
       Runner.options(["--project", config, "--mode", "smoke"]).scenarios,
     ).toEqual(PROJECT.scenarios);
-  });
-
-  test("parallel credential refresh preserves the first host update", async (): Promise<void> => {
-    const root: string = join(directory, "parallel-auth");
-    const auth: string = join(root, "host.json");
-    const initial: Buffer = Buffer.from("fake initial credential");
-    const values: string[] = ["fake refresh one", "fake refresh two"];
-    const credentials: string[] = values.map(
-      (_value: string, index: number): string => join(root, String(index)),
-    );
-    for (const [index, credential] of credentials.entries()) {
-      await mkdir(credential, { recursive: true });
-      await writeFile(join(credential, "auth.json"), values[index]);
-    }
-    await writeFile(auth, initial);
-    const input: Runner.Options = Runner.options([
-      "--project",
-      config,
-      "--auth",
-      auth,
-    ]);
-    const outcomes: PromiseSettledResult<void>[] = await Promise.allSettled(
-      credentials.map(
-        (credential: string): Promise<void> =>
-          Runner.restoreAuth(input, credential, initial),
-      ),
-    );
-    expect(
-      outcomes.filter((outcome): boolean => outcome.status === "fulfilled"),
-    ).toHaveLength(1);
-    expect(
-      outcomes.filter((outcome): boolean => outcome.status === "rejected"),
-    ).toHaveLength(1);
-    const winner: number = outcomes.findIndex(
-      (outcome): boolean => outcome.status === "fulfilled",
-    );
-    expect(await readFile(auth, "utf8")).toBe(values[winner]);
-  });
-
-  test("credential conflict releases the host lock", async (): Promise<void> => {
-    const root: string = join(directory, "conflicting-auth");
-    const auth: string = join(root, "host.json");
-    const credential: string = join(root, "worker");
-    const initial: Buffer = Buffer.from("fake old credential");
-    const newer: Buffer = Buffer.from("fake newer credential");
-    const refreshed: string = "fake worker refresh";
-    await mkdir(credential, { recursive: true });
-    await writeFile(auth, newer);
-    await writeFile(join(credential, "auth.json"), refreshed);
-    const input: Runner.Options = Runner.options([
-      "--project",
-      config,
-      "--auth",
-      auth,
-    ]);
-    await expect(
-      Runner.restoreAuth(input, credential, initial),
-    ).rejects.toThrow("newer credentials were preserved");
-    expect(await readFile(auth, "utf8")).toBe(newer.toString());
-    await Runner.restoreAuth(input, credential, newer);
-    expect(await readFile(auth, "utf8")).toBe(refreshed);
   });
 
   test("matching deployment permits acceptance tests", async (): Promise<void> => {

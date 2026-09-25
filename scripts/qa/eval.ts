@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import * as Claude from "@qa/eval-claude";
 import * as Model from "@qa/eval-model";
 import * as ReviewGuidance from "@qa/review";
 import { z } from "zod";
@@ -10,6 +11,7 @@ const REPEATS: number = 2;
 const JUDGES: number = 2;
 const SECONDS: number = 300;
 export const PARALLEL: number = 2;
+const CLAUDE_PARALLEL: number = 1;
 const SPLITS = ["calibration", "holdout", "all"] as const;
 export type Split = (typeof SPLITS)[number];
 const text = z.string().trim().min(1);
@@ -435,12 +437,21 @@ export const execute = async (
     repeats?: number;
     seconds?: number;
     split?: Split;
+    provider?: "codex" | "claude";
+    model?: string;
   },
   runner: Runner = Model.run,
 ): Promise<Report> => {
   const full = suiteSchema.parse(
     JSON.parse(await readFile(options.suite, "utf8")),
   );
+  const selectedRunner: Runner =
+    options.provider === "claude" ? Claude.run : runner;
+  const selectedSuite = {
+    ...full,
+    model:
+      options.model ?? (options.provider === "claude" ? "sonnet" : full.model),
+  };
   const split: Split = z.enum(SPLITS).parse(options.split ?? "calibration");
   const allImages: Buffer[][] = await Promise.all(
     full.cases.map((sample) =>
@@ -452,7 +463,7 @@ export const execute = async (
     ),
   );
   const suite = partition(
-    full,
+    selectedSuite,
     allImages.map((images) => images.map(hash)),
     split,
   );
@@ -488,7 +499,7 @@ export const execute = async (
     (sample) => allImages[full.cases.indexOf(sample)],
   );
   let codex: string = "stub runner";
-  if (runner === Model.run) {
+  if (selectedRunner === Model.run) {
     const version = Bun.spawnSync(["codex", "--version"]);
     if (version.exitCode !== 0) throw new Error("Codex CLI unavailable");
     codex = version.stdout.toString().trim();
@@ -501,7 +512,14 @@ export const execute = async (
     reviewSchema: z.toJSONSchema(reviewSchema),
     gradeSchema: z.toJSONSchema(gradeSchema),
     runner: hash(await readFile(import.meta.path)),
-    adapter: hash(await readFile(join(import.meta.dir, "eval-model.ts"))),
+    adapter: hash(
+      await readFile(
+        join(
+          import.meta.dir,
+          selectedRunner === Claude.run ? "eval-claude.ts" : "eval-model.ts",
+        ),
+      ),
+    ),
     guidanceLoader: hash(await readFile(join(import.meta.dir, "review.ts"))),
     codex,
     bun: Bun.version,
@@ -589,7 +607,7 @@ export const execute = async (
       };
       try {
         const result: Review = review(
-          await runner({
+          await selectedRunner({
             ...settings,
             prompt: reviewerPrompt(prompt, sample.context),
             images,
@@ -600,7 +618,7 @@ export const execute = async (
         );
         const judges: Grade[] = [];
         for (let judge: number = 0; judge < JUDGES; judge++) {
-          const judged: unknown = await runner({
+          const judged: unknown = await selectedRunner({
             ...settings,
             prompt: `${JUDGE}\nContext supplied to reviewer: ${sample.context}\nHidden rubric:\n${json({ scope: sample.scope, expected: sample.expected, cautions: sample.cautions })}\nUntrusted review:\n${json(result)}`,
             images,
@@ -629,7 +647,9 @@ export const execute = async (
       );
     }
   };
-  await Promise.all(Array.from({ length: PARALLEL }, lane));
+  const lanes: number =
+    selectedRunner === Claude.run ? CLAUDE_PARALLEL : PARALLEL;
+  await Promise.all(Array.from({ length: lanes }, lane));
   const regressions: string[] = baseline ? compare(baseline, report) : [];
   await writeFile(
     join(options.output, "summary.json"),
@@ -656,6 +676,8 @@ if (import.meta.main) {
         repeats: { type: "string" },
         seconds: { type: "string" },
         split: { type: "string", default: "calibration" },
+        provider: { type: "string", default: "codex" },
+        model: { type: "string" },
       },
     });
     if (!values.suite || !values.output)
@@ -670,6 +692,8 @@ if (import.meta.main) {
       repeats: values.repeats ? Number(values.repeats) : undefined,
       seconds: values.seconds ? Number(values.seconds) : undefined,
       split: z.enum(SPLITS).parse(values.split),
+      provider: z.enum(["codex", "claude"]).parse(values.provider),
+      model: values.model,
     });
     const failures: string[] = problems(report);
     console.log(

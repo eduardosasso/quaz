@@ -1,16 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import {
+  chown,
   copyFile,
   mkdir,
   mkdtemp,
-  open,
   readFile,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as Client from "@qa/client";
@@ -21,7 +20,6 @@ import * as Lifecycle from "@qa/lifecycle";
 import * as Project from "@qa/project";
 import * as Provider from "@qa/provider";
 import { z } from "zod";
-import * as Storage from "@/local_storage_native";
 import * as Protocol from "@/qa_protocol";
 
 const ROOT: string = resolve(import.meta.dir, "../..");
@@ -34,8 +32,6 @@ export type Options = {
   project: string;
   url: string;
   board: string;
-  skill: string;
-  auth: string;
   provider: string;
   attention?: string;
   model?: string;
@@ -55,12 +51,7 @@ export const options = (args: string[]): Options => {
       project: { type: "string" },
       tracker: { type: "string", default: process.env.QUAZ_TRACKER_URL ?? "" },
       board: { type: "string", default: process.env.QUAZ_TRACKER_BOARD ?? "" },
-      skill: {
-        type: "string",
-        default: join(homedir(), ".agents/skills/impeccable"),
-      },
-      auth: { type: "string", default: join(homedir(), ".codex/auth.json") },
-      provider: { type: "string", default: "codex" },
+      provider: { type: "string", default: "claude" },
       attention: { type: "string" },
       model: { type: "string" },
       resume: { type: "string" },
@@ -103,8 +94,6 @@ export const options = (args: string[]): Options => {
     project: resolve(values.project),
     url: values.tracker,
     board: values.board,
-    skill: resolve(values.skill),
-    auth: resolve(values.auth),
     ...(values.output ? { output: resolve(values.output) } : {}),
     provider: values.provider,
     attention: values.attention,
@@ -152,8 +141,22 @@ const command = async (args: string[], cwd: string): Promise<string> => {
 export const revision = async (
   project: Project.Project,
   runtime?: Docker.Runtime,
+  request: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response> = fetch,
 ): Promise<string> => {
-  if (project.revision === "source") return source(project);
+  if (project.revision === "target")
+    return Project.checkTarget(project, request);
+  if (project.revision === "source") {
+    const current: string = source(project);
+    if (runtime && runtime.revision !== current)
+      throw new Error(
+        "Project source changed since the QA image build; rebuild the project image",
+      );
+
+    return current;
+  }
   if (runtime) return Protocol.revision.parse(runtime.revision);
   if (
     await command(
@@ -175,6 +178,10 @@ export const container = (
   image: string,
   bridge: { url: string; token: string },
 ): string[] => {
+  const identity = Docker.user(
+    process.getuid?.() ?? 0,
+    process.getgid?.() ?? 0,
+  );
   const args: string[] = [
     "docker",
     "run",
@@ -196,7 +203,7 @@ export const container = (
     "--tmpfs",
     `/app/uploads:rw,nosuid,size=${CONFIG.temporaryMemory},mode=1777`,
     "--user",
-    `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+    `${identity.uid}:${identity.gid}`,
   ];
   if (input.runtime) {
     args.push(
@@ -236,7 +243,6 @@ export const container = (
   if (input.runtime) {
     env.QA_PROJECT_PATH = "/input/project.json";
     env.QA_ASSIGNMENT_PATH = "/input/assignment.json";
-    env.QA_SKILL_PATH = CONFIG.controller.skill;
   }
   for (const [key, value] of Object.entries(env))
     args.push("--env", `${key}=${value}`);
@@ -246,43 +252,9 @@ export const container = (
       Docker.mount(input.runtime, credential, "/credential"),
     );
   if (run.mode !== "smoke" && !input.runtime)
-    args.push(
-      "--mount",
-      `type=bind,src=${input.skill},dst=/skill,readonly`,
-      "--mount",
-      `type=bind,src=${credential},dst=/credential`,
-    );
+    args.push("--mount", `type=bind,src=${credential},dst=/credential`);
   args.push(image, "worker");
   return args;
-};
-export const restoreAuth = async (
-  input: Options,
-  directory: string,
-  initial: Buffer,
-): Promise<void> => {
-  const changed: Buffer = await readFile(join(directory, "auth.json"));
-  if (changed.equals(initial)) return;
-  const lock = await open(`${input.auth}.qa-lock`, "a", 0o600);
-  try {
-    if (!Storage.tryExclusiveLock(lock.fd))
-      throw new Error(
-        "Another QA run is renewing Codex credentials; newer credentials were preserved",
-      );
-    const current: Buffer = await readFile(input.auth);
-    if (!current.equals(initial) && !current.equals(changed))
-      throw new Error(
-        "Concurrent Codex credential renewal needs a fresh login; newer credentials were preserved",
-      );
-    const temporary: string = `${input.auth}.${randomUUID()}.tmp`;
-    await writeFile(temporary, changed, { mode: 0o600 });
-    try {
-      await rename(temporary, input.auth);
-    } finally {
-      await rm(temporary, { force: true });
-    }
-  } finally {
-    await lock.close();
-  }
 };
 export const journal = async (
   directory: string,
@@ -356,6 +328,25 @@ export const recover = async (
       };
     await journal(directory, JSON.stringify({ ...stored, finish: conclusion }));
   }
+  if (!original.receipt && stored.project?.revision === "target") {
+    try {
+      await Project.checkTarget(stored.project);
+    } catch (error: unknown) {
+      conclusion = {
+        ...conclusion,
+        status: "partial",
+        verdict: original.mode === "verify" ? "waiting" : "none",
+        summary: `Target deployment changed or became unavailable before publication: ${String(error)}`,
+        findings: [],
+        matching: undefined,
+        deployment: null,
+      };
+      await journal(
+        directory,
+        JSON.stringify({ ...stored, finish: conclusion }),
+      );
+    }
+  }
   if (
     !original.receipt &&
     original.mode === "verify" &&
@@ -410,20 +401,13 @@ export const recover = async (
 };
 export const validate = (input: Options): void => {
   if (input.mode !== "smoke") {
-    if (!lstatSync(input.auth).isFile())
-      throw new Error("Run codex login first");
-    for (const guide of [
-      "SKILL.md",
-      ...["critique", "audit", "polish", "layout", "typeset", "adapt"].map(
-        (name: string): string => `reference/${name}.md`,
-      ),
-    ])
-      if (!existsSync(join(input.skill, guide)))
-        throw new Error(`Missing Impeccable guide: ${guide}`);
+    if (!process.env.CLAUDE_CODE_OAUTH_TOKEN)
+      throw new Error(
+        "Missing CLAUDE_CODE_OAUTH_TOKEN for guided Quaz reviews",
+      );
   }
-  for (const path of [input.project, input.auth, input.skill])
-    if (path.includes(",") || path.includes("\n"))
-      throw new Error("Docker paths must not contain commas or newlines");
+  if (input.project.includes(",") || input.project.includes("\n"))
+    throw new Error("Docker paths must not contain commas or newlines");
 };
 export const run = async (
   input: Options,
@@ -440,7 +424,11 @@ export const run = async (
     const stored = recoverySchema.parse(
       JSON.parse(await readFile(join(input.resume, "recovery.json"), "utf8")),
     );
-    await recover(client, input.resume);
+    const conclusion: Protocol.Finish = await recover(client, input.resume);
+    if (conclusion.status !== "complete")
+      throw new Error(
+        `QA resume remains ${conclusion.status}: ${conclusion.summary}. Evidence: ${input.resume}`,
+      );
     await rm(input.resume, { recursive: true });
     return [`${input.url}/${input.board} (run ${stored.run.id})`];
   }
@@ -455,7 +443,10 @@ export const run = async (
   const records: Protocol.Run[] = [];
   const attempts: string[] = [];
   const image: string =
-    input.runtime?.image ?? `${CONFIG.image}:${fingerprint.slice(0, 16)}`;
+    input.runtime?.image ??
+    (project.revision === "target"
+      ? await Image.base()
+      : `${CONFIG.image}:${fingerprint.slice(0, 16)}`);
   const names: Set<string> = new Set();
   const endpoints: Map<string, { run: Protocol.Run }> = new Map();
   const bridge = Bun.serve({
@@ -576,12 +567,17 @@ export const run = async (
       ["docker", "info", "--format", "{{.ServerVersion}}"],
       project.root,
     );
-    if (!input.runtime) {
+    if (!input.runtime && project.revision !== "target") {
       console.log(`Preparing ${project.id} QA image`);
       active();
+      const base: string = await Image.base();
       const context: string = await Image.stage(project, scratch);
+      if (source({ ...project, root: context }) !== fingerprint)
+        throw new Error(
+          "Staged QA image source differs from the project source",
+        );
       const preparation = Bun.spawn(
-        Image.args(project, input.skill, selectedRevision, image, context),
+        Image.args(project, selectedRevision, image, context, base),
         {
           cwd: project.root,
           stdout: Bun.file(join(scratch, "build.log")),
@@ -632,8 +628,6 @@ export const run = async (
             result: null,
           };
           let conclusion: Protocol.Finish | undefined;
-          let initial: Buffer | undefined;
-          let credentialError: string | undefined;
 
           const bridgeToken: string = randomUUID();
           endpoints.set(bridgeToken, { run: record });
@@ -691,17 +685,24 @@ export const run = async (
                 );
               }
               if (input.mode !== "smoke") {
-                initial = await readFile(input.auth);
-                await writeFile(join(credential, "auth.json"), initial, {
-                  mode: 0o600,
-                });
-                await writeFile(`${credential}.initial.next`, initial, {
-                  mode: 0o600,
-                });
-                await rename(
-                  `${credential}.initial.next`,
-                  `${credential}.initial`,
+                await writeFile(
+                  join(credential, "token"),
+                  process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
+                  {
+                    mode: 0o600,
+                  },
                 );
+              }
+              if (process.getuid?.() === 0) {
+                const worker = Docker.user(0, 0);
+                await chown(output, worker.uid, worker.gid);
+                await chown(credential, worker.uid, worker.gid);
+                if (input.mode !== "smoke")
+                  await chown(
+                    join(credential, "token"),
+                    worker.uid,
+                    worker.gid,
+                  );
               }
               active();
               names.add(record.id);
@@ -794,24 +795,13 @@ export const run = async (
             );
           } finally {
             endpoints.delete(bridgeToken);
-            try {
-              if (initial) await restoreAuth(input, credential, initial);
-            } catch (error: unknown) {
-              credentialError = String(error);
-              await writeFile(
-                join(output, "credential-error.json"),
-                JSON.stringify({ error: credentialError }),
-              );
-            } finally {
-              await rm(credential, { recursive: true, force: true });
-            }
+            await rm(credential, { recursive: true, force: true });
           }
           conclusion = await recover(client, directory);
           if (!conclusion) throw new Error("QA run has no outcome");
-          await rm(directory, { recursive: true });
-          if (credentialError) throw new Error(credentialError);
           if (conclusion.status === "failed")
             throw new Error(conclusion.summary);
+          await rm(directory, { recursive: true });
           return `${input.url}/${input.board} (run ${record.id})`;
         },
       ),
@@ -849,8 +839,9 @@ export const run = async (
               join(scratch, name),
               join(directory, "output", name),
             );
-        await recover(client, directory);
-        await rm(directory, { recursive: true });
+        const conclusion: Protocol.Finish = await recover(client, directory);
+        if (conclusion.status !== "failed")
+          await rm(directory, { recursive: true });
       } catch (recoveryError: unknown) {
         console.error(
           `QA publication needs --resume ${directory}: ${String(recoveryError)}`,
