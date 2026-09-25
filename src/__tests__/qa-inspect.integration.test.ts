@@ -23,6 +23,8 @@ const TIMEOUT_MS: number = 30_000;
 setDefaultTimeout(TIMEOUT_MS);
 
 const EXECUTABLE: string = "/usr/bin/chromium";
+const BROWSER_TEST: boolean =
+  process.env.QA_INSPECT_BROWSER_TEST === "1" && existsSync(EXECUTABLE);
 const OUTSIDE_CONTROLS: number = 90;
 const MOBILE_SCALE: number = 3;
 const OVERFLOW_WIDTH: number = 600;
@@ -78,7 +80,7 @@ const HTML: string = `<!doctype html>
 </body>
 </html>`;
 
-describe.skipIf(!existsSync(EXECUTABLE))("QA browser inspection", (): void => {
+describe.skipIf(!BROWSER_TEST)("QA browser inspection", (): void => {
   let profile: string;
   let server: Bun.Server<undefined>;
   let context: BrowserContext;
