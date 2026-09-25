@@ -167,14 +167,22 @@ export const checkTarget = async (
   if (project.revision !== "target" || !project.deployment?.revision)
     throw new Error("Project has no deployed target revision");
   const response: Response = await request(project.deployment.url, {
-    method: "HEAD",
+    method: "GET",
     redirect: "error",
     signal: AbortSignal.timeout(Protocol.REQUEST_MS),
   });
-  if (
-    !response.ok ||
-    response.headers.get("x-quaz-revision") !== project.deployment.revision
-  )
+  if (!response.ok)
+    throw new Error("Target deployment revision does not match project config");
+
+  let revision: string | null = response.headers.get("x-quaz-revision");
+  if (!revision) {
+    const body: unknown = await response.json();
+    const parsed: { revision: string } = z
+      .object({ revision: z.string() })
+      .parse(body);
+    revision = parsed.revision;
+  }
+  if (revision !== project.deployment.revision)
     throw new Error("Target deployment revision does not match project config");
 
   return project.deployment.revision;

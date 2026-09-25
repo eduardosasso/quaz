@@ -599,73 +599,79 @@ const audit = async (
     },
     "runtime",
   )}\nReview visual evidence only. Do not revise the tested flow, technical checks, or scores.`;
-  await writeFile(join(OUTPUT, "audit/prompt.md"), instruction);
   const schema: string = join(OUTPUT, "audit/schema.json");
   await writeFile(schema, Provider.schema(Audit.schema));
   const provider: Provider.Provider = Provider.select("claude");
-  const invocation: Provider.Invocation = provider.invocation({
-    work: WORK,
-    schema,
-    result: join(OUTPUT, "audit/result.json"),
-    browser: [],
-    images,
-    token: CREDENTIAL,
-    model: options.model,
-  });
-  const child: ChildProcess = launch(
-    invocation.command,
-    invocation.args,
-    "audit/events.raw",
-    invocation.env,
-    WORK,
-  );
-  const inputFailure: () => Error | undefined = sendFrame(
-    child,
-    `${Provider.frame(instruction, images)}\n`,
-  );
-  let code: number;
-  try {
-    code = await completion(
-      child,
-      Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
-    );
-  } finally {
-    await Provider.scrub(
-      join("/tmp/qa-raw/audit/events.raw.jsonl"),
-      CREDENTIAL,
-    );
-    await Provider.scrub(
-      join("/tmp/qa-raw/audit/events.raw.stderr.log"),
-      CREDENTIAL,
-    );
-  }
-  const inputError: Error | undefined = inputFailure();
-  if (inputError) throw inputError;
-  if (code !== 0) {
-    const stderr: string = await readFile(
-      join("/tmp/qa-raw/audit/events.raw.stderr.log"),
-      "utf8",
-    );
-    const stdout: string = await readFile(
-      join("/tmp/qa-raw/audit/events.raw.jsonl"),
-      "utf8",
-    );
-    throw new Error(
-      `Visual audit exited ${code}: ${Provider.failure(stderr, stdout)}`,
-    );
-  }
-  await provider.collect(
-    join("/tmp/qa-raw/audit/events.raw.jsonl"),
-    join(OUTPUT, "audit/events.jsonl"),
-    join(OUTPUT, "audit/result.json"),
-    false,
-  );
-  const result: Review.Assessment = Audit.merge(
+  let attempt: number = 0;
+  return Audit.retry(
     review,
-    JSON.parse(await readFile(join(OUTPUT, "audit/result.json"), "utf8")),
-  );
+    async (feedback: string): Promise<unknown> => {
+      if (
+        attempt > 0 &&
+        deadline - Date.now() < MIN_PHASE_SECONDS * MILLISECONDS
+      )
+        throw new Error("Visual audit retry has insufficient time");
+      attempt++;
+      const prefix: string = `audit/attempt-${attempt}`;
+      const raw: string = join("/tmp/qa-raw", prefix, "events.raw");
+      await mkdir(join(OUTPUT, prefix), { recursive: true });
+      const prompt: string = feedback
+        ? `${instruction}\nThe previous response failed validation: ${feedback}. Correct the structure and keep supported evidence.`
+        : instruction;
+      await writeFile(join(OUTPUT, prefix, "prompt.md"), prompt);
+      const invocation: Provider.Invocation = provider.invocation({
+        work: WORK,
+        schema,
+        result: join(OUTPUT, prefix, "result.json"),
+        browser: [],
+        images,
+        token: CREDENTIAL,
+        model: options.model,
+      });
+      const child: ChildProcess = launch(
+        invocation.command,
+        invocation.args,
+        `${prefix}/events.raw`,
+        invocation.env,
+        WORK,
+      );
+      const inputFailure: () => Error | undefined = sendFrame(
+        child,
+        `${Provider.frame(prompt, images)}\n`,
+      );
+      let code: number;
+      try {
+        code = await completion(
+          child,
+          Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
+        );
+      } finally {
+        await Provider.scrub(`${raw}.jsonl`, CREDENTIAL);
+        await Provider.scrub(`${raw}.stderr.log`, CREDENTIAL);
+      }
+      const inputError: Error | undefined = inputFailure();
+      if (inputError) throw inputError;
+      if (code !== 0) {
+        const stderr: string = await readFile(`${raw}.stderr.log`, "utf8");
+        const stdout: string = await readFile(`${raw}.jsonl`, "utf8");
+        throw new Error(
+          `Visual audit exited ${code}: ${Provider.failure(stderr, stdout)}`,
+        );
+      }
+      await provider.collect(
+        `${raw}.jsonl`,
+        join(OUTPUT, prefix, "events.jsonl"),
+        join(OUTPUT, prefix, "result.json"),
+        false,
+      );
 
-  return Review.assessment(result, OUTPUT, APP);
+      return JSON.parse(
+        await readFile(join(OUTPUT, prefix, "result.json"), "utf8"),
+      ) as unknown;
+    },
+    async (result: Review.Assessment): Promise<Review.Assessment> =>
+      Review.assessment(result, OUTPUT, APP),
+  );
 };
 
 const reviews = async (

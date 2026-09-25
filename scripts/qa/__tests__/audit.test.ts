@@ -101,8 +101,82 @@ test("visual audit keeps comparison and no-peer fields consistent", () => {
     limitations: original.limitations,
   });
   expect(instruction).toContain(
-    "when design.comparisons has an entry, set design.noPeers to null",
+    "When design.comparisons has an entry, set design.noPeers to null",
   );
+  expect(instruction).toContain(
+    "design.comparisons[].controls name must match one design.controls[].name exactly",
+  );
+});
+
+test("invalid visual audit retries with validation feedback", async () => {
+  const feedback: string[] = [];
+  const result: Review.Assessment = await Audit.retry(
+    original,
+    async (reason: string): Promise<unknown> => {
+      feedback.push(reason);
+
+      return {
+        design: {
+          ...original.design,
+          noPeers: feedback.length === 1 ? "No peers" : null,
+        },
+        candidates: original.candidates,
+        limitations: original.limitations,
+      };
+    },
+    async (value: Review.Assessment): Promise<Review.Assessment> => {
+      if (value.design.noPeers) throw new Error("No peers conflict");
+
+      return value;
+    },
+  );
+  expect(result.design.noPeers).toBeNull();
+  expect(feedback).toEqual(["", "No peers conflict"]);
+});
+
+test("second invalid visual audit stops the run", async () => {
+  const invalid: unknown = {
+    design: { ...original.design, noPeers: "No peers" },
+    candidates: original.candidates,
+    limitations: original.limitations,
+  };
+  let calls: number = 0;
+  await expect(
+    Audit.retry(
+      original,
+      async (): Promise<unknown> => {
+        calls++;
+
+        return invalid;
+      },
+      async (): Promise<Review.Assessment> => {
+        throw new Error("No peers conflict");
+      },
+    ),
+  ).rejects.toThrow("No peers conflict");
+  expect(calls).toBe(2);
+});
+
+test("empty audit error still gives retry feedback", async () => {
+  const feedback: string[] = [];
+  await Audit.retry(
+    original,
+    async (reason: string): Promise<unknown> => {
+      feedback.push(reason);
+
+      return {
+        design: original.design,
+        candidates: original.candidates,
+        limitations: original.limitations,
+      };
+    },
+    async (value: Review.Assessment): Promise<Review.Assessment> => {
+      if (feedback.length === 1) throw new Error("");
+
+      return value;
+    },
+  );
+  expect(feedback).toEqual(["", "Invalid visual audit response"]);
 });
 
 test("visual audit keeps existing candidates and accepts a revised design", () => {

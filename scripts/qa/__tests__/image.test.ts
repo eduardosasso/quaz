@@ -239,10 +239,39 @@ test("remote target uses the deployed revision with one Quaz image", async () =>
   });
   expect(project.sources).toEqual([]);
   expect(await Runner.revision(project, undefined, request)).toBe(revision);
-  expect(requests).toEqual([`HEAD:${url}`]);
+  expect(requests).toEqual([`GET:${url}`]);
   await expect(
     Runner.revision(
       { ...project, deployment: { url, revision: "e".repeat(64) } },
+      undefined,
+      request,
+    ),
+  ).rejects.toThrow("does not match");
+});
+
+test("remote target accepts a generic JSON version endpoint", async () => {
+  const revision: string = "d".repeat(40);
+  const url: string = "https://target.example/api/version";
+  const requests: string[] = [];
+  const request = async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    requests.push(`${init?.method}:${String(input)}`);
+
+    return Response.json({ revision });
+  };
+  const project: Project.Project = Project.schema.parse({
+    id: "remote",
+    scenarios: ["home"],
+    revision: "target",
+    deployment: { url, revision },
+  });
+  expect(await Runner.revision(project, undefined, request)).toBe(revision);
+  expect(requests).toEqual([`GET:${url}`]);
+  await expect(
+    Runner.revision(
+      { ...project, deployment: { url, revision: "e".repeat(40) } },
       undefined,
       request,
     ),
