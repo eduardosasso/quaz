@@ -4,6 +4,8 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 
+export class InvalidOutputError extends Error {}
+
 const DISABLED: string[] = [
   "apps",
   "plugins",
@@ -329,7 +331,15 @@ export const run = async (input: Input): Promise<unknown> => {
     await writeFile(join(input.directory, "response.json"), response);
     events(stdout.join(""), JSON.parse(response));
 
-    return input.schema.parse(JSON.parse(response));
+    try {
+      return input.schema.parse(JSON.parse(response));
+    } catch (error: unknown) {
+      if (error instanceof z.ZodError)
+        throw new InvalidOutputError("Model output does not match its schema", {
+          cause: error,
+        });
+      throw error;
+    }
   } finally {
     await rm(work, { recursive: true, force: true });
   }

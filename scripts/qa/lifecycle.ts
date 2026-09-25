@@ -5,6 +5,7 @@ import type { Client } from "@qa/client";
 import * as Duplicates from "@qa/duplicates";
 import type { Project } from "@qa/project";
 import * as Review from "@qa/review";
+import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
 
 export type Plan = {
@@ -191,6 +192,7 @@ const files = async (root: string, prefix: string = ""): Promise<string[]> => {
     else if (
       /\.(png|json|jsonl|log|md|txt|ya?ml)$/.test(name) &&
       !name.endsWith("schema.json") &&
+      !name.startsWith("events.raw") &&
       name !== "recovery.json" &&
       name !== "project.json" &&
       name !== "assignment.json"
@@ -288,6 +290,23 @@ export const publication = async (
       deployment: selection.deployment,
     };
   }
+  const audit = z
+    .object({
+      status: z.enum(["complete", "skipped"]),
+      reason: z.string().optional(),
+    })
+    .strict()
+    .safeParse(report.audit);
+  if (!audit.success || audit.data.status !== "complete")
+    return {
+      ...result(
+        "Visual audit is incomplete; findings remain unpublished.",
+        "none",
+        "partial",
+      ),
+      report,
+      evidence,
+    };
   const assessment: Review.Assessment = await Review.assessment(
     report.assessment,
     directory,

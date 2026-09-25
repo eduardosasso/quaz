@@ -1,0 +1,8 @@
+{
+  "commands": {
+    "lint": "bun run lint",
+    "check": "bun run check",
+    "test": "bun run test"
+  },
+  "risky": ["Dockerfile.release", "scripts/release.ts", ".github/workflows"]
+}

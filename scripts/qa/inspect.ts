@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import CONFIG from "@qa/config.json";
 import type { Page } from "playwright";
 import { z } from "zod";
 
@@ -90,6 +91,7 @@ const metadataSchema = z.object({
   runId: z.string(),
   commit: z.string(),
   origin: z.string(),
+  sourceAvailable: z.boolean(),
 });
 export const bindingSchema = z
   .object({
@@ -99,15 +101,13 @@ export const bindingSchema = z
     url: z.string().url(),
     selector: z.string().min(1),
     detector: z.object({
-      status: z.literal("complete"),
-      files: z
-        .array(
-          z.object({
-            path: z.string().min(1),
-            sha256: z.string().regex(/^[a-f0-9]{64}$/),
-          }),
-        )
-        .min(1),
+      status: z.enum(["complete", "unavailable"]),
+      files: z.array(
+        z.object({
+          path: z.string().min(1),
+          sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        }),
+      ),
       findings: z.array(z.unknown()),
     }),
     measurements: z
@@ -115,6 +115,16 @@ export const bindingSchema = z
       .length(CONDITIONS.length),
   })
   .superRefine((value, context): void => {
+    if (
+      (value.detector.status === "complete" &&
+        value.detector.files.length === 0) ||
+      (value.detector.status === "unavailable" &&
+        (value.detector.files.length > 0 || value.detector.findings.length > 0))
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Detector status does not match source evidence",
+      });
     for (const condition of CONDITIONS) {
       const entries = value.measurements.filter(
         (entry): boolean => entry.condition === condition,
@@ -552,31 +562,35 @@ export const inspect = async (
   );
   if (new URL(url).origin !== metadata.origin)
     throw new Error("Inspection must stay in the disposable app");
-  const files: string[] = await source(ROOT, paths);
-  const stdout: string = await new Promise((resolve, reject): void => {
-    execFile(
-      "node",
-      [
-        join(
-          process.env.QA_SKILL_PATH ?? "/opt/impeccable",
-          "scripts/detect.mjs",
+  if (!metadata.sourceAvailable && paths.length)
+    throw new Error("Remote target has no local source files");
+  const files: string[] = metadata.sourceAvailable
+    ? await source(ROOT, paths)
+    : [];
+  const findings: unknown[] = metadata.sourceAvailable
+    ? z.array(z.unknown()).parse(
+        JSON.parse(
+          await new Promise((resolve, reject): void => {
+            execFile(
+              join(CONFIG.controller.skill, "scripts/impeccable"),
+              ["detect", "--json", ...files],
+              { cwd: ROOT, timeout: TIMEOUT, maxBuffer: DETECTOR_BYTES },
+              (error, stdout, stderr): void => {
+                if (error && error.code !== 2) {
+                  reject(
+                    new Error(
+                      `Impeccable detector fails: ${stderr || error.message}`,
+                    ),
+                  );
+                  return;
+                }
+                resolve(stdout);
+              },
+            );
+          }),
         ),
-        "--json",
-        ...files,
-      ],
-      { cwd: ROOT, timeout: TIMEOUT, maxBuffer: DETECTOR_BYTES },
-      (error, stdout, stderr): void => {
-        if (error && error.code !== 2) {
-          reject(
-            new Error(`Impeccable detector fails: ${stderr || error.message}`),
-          );
-          return;
-        }
-        resolve(stdout);
-      },
-    );
-  });
-  const findings: unknown[] = z.array(z.unknown()).parse(JSON.parse(stdout));
+      )
+    : [];
   const { measurements, errors } = await capture(page, selector);
   const result = bindingSchema.parse({
     runId: metadata.runId,
@@ -585,7 +599,7 @@ export const inspect = async (
     url,
     selector,
     detector: {
-      status: "complete",
+      status: metadata.sourceAvailable ? "complete" : "unavailable",
       files: await Promise.all(
         files.map(async (path: string) => ({
           path: relative(ROOT, path),
@@ -607,6 +621,7 @@ export const inspect = async (
     url,
     selector,
     detector: {
+      status: result.detector.status,
       files: result.detector.files,
       count: findings.length,
       findings: findings.slice(0, 12),
@@ -635,6 +650,6 @@ export const inspect = async (
       },
     })),
     errors,
-    note: `Read ${phase}/technical.json for full style, performance, and detector evidence.`,
+    note: `Read ${phase}/technical.json for full runtime measurements and available detector evidence.`,
   };
 };
