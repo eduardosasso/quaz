@@ -565,6 +565,7 @@ const reviews = async (
       Date.now() + reviewSeconds * MILLISECONDS,
     ),
     OUTPUT,
+    APP,
   );
   Review.visualAssessment(
     await readFile(join(OUTPUT, "reviewer/events.jsonl"), "utf8"),
