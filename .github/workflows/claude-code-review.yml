@@ -25,8 +25,7 @@ jobs:
       id-token: write
     uses: eduardosasso/claude-review/.github/workflows/review.yml@v1
     with:
-      context: "Quaz is a Bun and TypeScript QA runner. Review its generic project and Tracker boundaries, disposable target isolation, run recovery, and tests. A target app must not receive the Overdew tracker token."
-      allowed_bots: "overdew-app,merv-app,claude,github-actions"
+      context: "This repository is a Bun and TypeScript QA runner (Playwright, Docker, bun:sqlite); tests live in src/__tests__ and scripts/qa/__tests__ and run with bun test."
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
