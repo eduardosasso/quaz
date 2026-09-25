@@ -14,9 +14,28 @@ export type Input = {
   result: string;
   browser: string[];
   token: string;
+  images?: Buffer[];
   skill?: string;
   model?: string;
 };
+export const frame = (prompt: string, images: Buffer[]): string =>
+  JSON.stringify({
+    type: "user",
+    message: {
+      role: "user",
+      content: [
+        ...images.map((bytes: Buffer) => ({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: bytes.toString("base64"),
+          },
+        })),
+        { type: "text", text: prompt },
+      ],
+    },
+  });
 export type Provider = {
   invocation: (input: Input) => Invocation;
   collect: (
@@ -149,6 +168,7 @@ export const normalize = (
 };
 export const argumentsFor = (input: Input, schema: string): string[] => [
   "-p",
+  ...(input.images?.length ? ["--input-format", "stream-json"] : []),
   "--setting-sources",
   "",
   "--no-session-persistence",
@@ -174,7 +194,7 @@ export const schema = (value: z.ZodType): string => {
 };
 export const redacted = (value: string, token: string): string =>
   token ? value.replaceAll(token, "[REDACTED]") : value;
-const frame = (line: string): unknown => {
+const parseFrame = (line: string): unknown => {
   try {
     return JSON.parse(line) as unknown;
   } catch (error: unknown) {
@@ -188,7 +208,7 @@ export const failure = (stderr: string, stdout: string = ""): string => {
   const terminal = stdout
     .split("\n")
     .filter((line: string): boolean => line.length > 0)
-    .map(frame)
+    .map(parseFrame)
     .map((value: unknown) =>
       z
         .object({

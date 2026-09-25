@@ -34,6 +34,30 @@ test("Claude runs with a schema and only the requested browser", () => {
   ).toBe("");
 });
 
+test("Claude visual audit receives images without tools", () => {
+  const images: Buffer[] = [Buffer.from("saved-image")];
+  const args: string[] = Provider.argumentsFor(
+    { ...input, browser: [], images },
+    '{"type":"object"}',
+  );
+  const message = JSON.parse(Provider.frame("Audit this review", images));
+  expect(
+    args.slice(
+      args.indexOf("--input-format"),
+      args.indexOf("--input-format") + 2,
+    ),
+  ).toEqual(["--input-format", "stream-json"]);
+  expect(args[args.indexOf("--allowedTools") + 1]).toBe("");
+  expect(args[args.indexOf("--tools") + 1]).toBe("");
+  expect(message.message.content[0].source.data).toBe(
+    images[0]?.toString("base64"),
+  );
+  expect(message.message.content[1]).toEqual({
+    type: "text",
+    text: "Audit this review",
+  });
+});
+
 test("Claude browser evidence becomes checked QA events", () => {
   const lines: string = [
     {

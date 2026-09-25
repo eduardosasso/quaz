@@ -5,26 +5,8 @@ import * as Provider from "@qa/provider";
 import { z } from "zod";
 
 const CLAUDE: string = "claude";
-const IMAGE: string = "image/png";
-
 export const frame = (input: Model.Input): string =>
-  JSON.stringify({
-    type: "user",
-    message: {
-      role: "user",
-      content: [
-        ...input.images.map((bytes: Buffer) => ({
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: IMAGE,
-            data: bytes.toString("base64"),
-          },
-        })),
-        { type: "text", text: input.prompt },
-      ],
-    },
-  });
+  Provider.frame(input.prompt, input.images);
 
 export const argumentsFor = (input: Model.Input): string[] => [
   "-p",
