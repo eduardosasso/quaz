@@ -248,6 +248,7 @@ describe.skipIf(!existsSync(EXECUTABLE))("QA browser inspection", (): void => {
             runId: "phase-inspection-test",
             commit: "a".repeat(40),
             origin: server.url.origin,
+            sourceAvailable: true,
           }),
         );
         await page.getByRole("button", { name: "Open editor" }).tap();

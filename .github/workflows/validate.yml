@@ -45,7 +45,9 @@ jobs:
         run: bun run test
 
       - name: Test browser inspection in Quaz image
-        run: docker run --rm --entrypoint bun quaz:base --no-env-file test src/__tests__/qa-inspect.integration.test.ts
+        run: |
+          docker run --rm -e QA_INSPECT_DOCKER_TEST=1 --tmpfs /output --entrypoint sh quaz:base -c \
+            'mkdir -p /app/src/__tests__ && cp /quaz/src/__tests__/qa-inspect.integration.test.ts /app/src/__tests__/ && bun --no-env-file test src/__tests__/qa-inspect.integration.test.ts'
 
       - name: Check release tag
         if: startsWith(github.ref, 'refs/tags/v')
