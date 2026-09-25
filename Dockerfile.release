@@ -61,6 +61,7 @@ ENV HOME=/tmp/home
 WORKDIR /quaz
 COPY package.json bun.lock tsconfig.json ./
 RUN bun install --frozen-lockfile --production
+COPY Dockerfile.release ./Dockerfile.release
 COPY src ./src
 COPY scripts ./scripts
 COPY examples ./examples

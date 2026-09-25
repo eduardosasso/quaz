@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import * as Docker from "@qa/docker";
+import * as Image from "@qa/image";
 import * as Runner from "@qa/run";
 import type * as Protocol from "@/qa_protocol";
 
@@ -50,6 +51,14 @@ test("controller keeps a network with attached target containers", () => {
   expect(Docker.connected([{ Containers: { target: { Name: "app" } } }])).toBe(
     1,
   );
+});
+
+test("runner provenance identifies Quaz and its worker image", () => {
+  const image: string = `sha256:${"b".repeat(64)}`;
+  expect(Runner.provenance(image)).toEqual({
+    source: Image.source(),
+    image,
+  });
 });
 
 test("worker receives only run-scoped mounts and bridge access", () => {

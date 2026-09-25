@@ -407,6 +407,11 @@ export const validate = (input: Options): void => {
   if (input.project.includes(",") || input.project.includes("\n"))
     throw new Error("Docker paths must not contain commas or newlines");
 };
+export const provenance = (image: string): Protocol.Runner =>
+  Protocol.runner.parse({
+    source: Image.source(),
+    image: /sha256:[a-f0-9]{64}$/.exec(image)?.[0],
+  });
 export const run = async (
   input: Options,
   signal?: AbortSignal,
@@ -574,10 +579,7 @@ export const run = async (
           project.root,
         );
       }
-      const runner: Protocol.Runner = Protocol.runner.parse({
-        source: input.runtime?.revision ?? Image.source(),
-        image: /sha256:[a-f0-9]{64}$/.exec(image)?.[0],
-      });
+      const runner: Protocol.Runner = provenance(image);
       for (let index: number = 0; index < input.testers; index++) {
         active();
         const began: Protocol.Begin = {
