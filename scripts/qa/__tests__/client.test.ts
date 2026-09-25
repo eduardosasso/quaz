@@ -339,6 +339,12 @@ test("imports a file-backed WAL database", async () => {
     const file: string = join(folder, "history.db");
     const source: State.State = State.open(file, shared.tracker);
     await source.begin(BEGIN);
+    source.db.exec(
+      "CREATE TABLE qa_import (id INTEGER PRIMARY KEY CHECK(id=1), marker TEXT NOT NULL)",
+    );
+    source.db
+      .query("INSERT INTO qa_import (id,marker) VALUES (1,?)")
+      .run("test-import");
     source.db.close();
     process.env.QUAZ_DB = file;
     process.env.QUAZ_BOOTSTRAP = "import";
@@ -366,6 +372,53 @@ test("imports a file-backed WAL database", async () => {
       BEGIN.id,
     );
     await second.close?.();
+  } finally {
+    if (previous === undefined) delete process.env.QUAZ_DB;
+    else process.env.QUAZ_DB = previous;
+    if (priorBootstrap === undefined) delete process.env.QUAZ_BOOTSTRAP;
+    else process.env.QUAZ_BOOTSTRAP = priorBootstrap;
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test("import refuses an unrelated remote snapshot", async () => {
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-import-conflict-"));
+  const previous: string | undefined = process.env.QUAZ_DB;
+  const priorBootstrap: string | undefined = process.env.QUAZ_BOOTSTRAP;
+  const shared = fixture();
+  try {
+    process.env.QUAZ_DB = join(folder, "empty.db");
+    process.env.QUAZ_BOOTSTRAP = "empty";
+    const first: Client.Client = await Client.open(
+      "https://tracker.example",
+      "owner/board",
+      "token",
+      "sample",
+      shared.tracker,
+    );
+    await first.close?.();
+    const writes: number = shared.writes();
+    const file: string = join(folder, "import.db");
+    const source: State.State = State.open(file, shared.tracker);
+    source.db.exec(
+      "CREATE TABLE qa_import (id INTEGER PRIMARY KEY CHECK(id=1), marker TEXT NOT NULL)",
+    );
+    source.db
+      .query("INSERT INTO qa_import (id,marker) VALUES (1,?)")
+      .run("different-import");
+    source.db.close();
+    process.env.QUAZ_DB = file;
+    process.env.QUAZ_BOOTSTRAP = "import";
+    await expect(
+      Client.open(
+        "https://tracker.example",
+        "owner/board",
+        "token",
+        "sample",
+        shared.tracker,
+      ),
+    ).rejects.toThrow("does not match the requested legacy import");
+    expect(shared.writes()).toBe(writes);
   } finally {
     if (previous === undefined) delete process.env.QUAZ_DB;
     else process.env.QUAZ_DB = previous;

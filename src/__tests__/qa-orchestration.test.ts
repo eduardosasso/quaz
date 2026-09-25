@@ -296,7 +296,7 @@ describe("QA orchestration boundaries", (): void => {
     await writeFile(project, JSON.stringify(PROJECT));
     await writeFile(
       join(binaries, "docker"),
-      `#!/bin/sh\ncase "$1" in\ninfo) echo test ;;\ncontext) echo default ;;\nrun) : > '${marker}'; exit 1 ;;\nesac\n`,
+      `#!/bin/sh\ncase "$1" in\ninfo) echo test ;;\ncontext) echo default ;;\nbuild) exit 0 ;;\nimage) echo sha256:${"b".repeat(64)} ;;\nrun) : > '${marker}'; exit 1 ;;\nesac\n`,
       { mode: 0o700 },
     );
     const spawn: typeof Bun.spawn = Bun.spawn;
@@ -387,8 +387,22 @@ describe("QA orchestration boundaries", (): void => {
 
   test("a lost begin response preserves recovery or a final outcome", async (): Promise<void> => {
     const startup: string = join(directory, "startup");
+    const binaries: string = join(startup, "bin");
     const project: string = join(startup, "project.json");
-    await mkdir(startup);
+    await mkdir(binaries, { recursive: true });
+    await writeFile(
+      join(binaries, "docker"),
+      `#!/bin/sh\ncase "$1" in\ninfo) echo test ;;\ncontext) echo default ;;\nbuild) exit 0 ;;\nimage) echo sha256:${"b".repeat(64)} ;;\nesac\n`,
+      { mode: 0o700 },
+    );
+    const spawn: typeof Bun.spawn = Bun.spawn;
+    const executable = spyOn(Bun, "spawn").mockImplementation(
+      ((...args: Parameters<typeof Bun.spawn>): ReturnType<typeof Bun.spawn> =>
+        spawn(
+          [join(binaries, "docker"), ...args[0].slice(1)],
+          args[1],
+        )) as typeof Bun.spawn,
+    );
     await writeFile(join(startup, "app.ts"), "export const value = 1;");
     await writeFile(project, JSON.stringify(PROJECT));
     const records: Protocol.Run[] = [];
@@ -439,6 +453,7 @@ describe("QA orchestration boundaries", (): void => {
         ),
       ).rejects.toThrow("Begin response lost");
       expect(records).toHaveLength(1);
+      expect(records[0].runner?.image).toBe(`sha256:${"b".repeat(64)}`);
       const artifacts: string = resolve(import.meta.dir, "../../artifacts/qa");
       let recoverable: boolean = false;
       for (const name of await readdir(artifacts)) {
@@ -454,6 +469,7 @@ describe("QA orchestration boundaries", (): void => {
     } finally {
       base.mockRestore();
       connection.mockRestore();
+      executable.mockRestore();
     }
   });
 

@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
@@ -63,8 +64,10 @@ export const migrate = (
   outputPath: string,
   board: number,
   project: string,
+  tracker: string,
 ): Counts => {
   Protocol.key.parse(project);
+  const origin: string = new URL(tracker).origin;
   if (!Number.isSafeInteger(board) || board <= 0)
     throw new Error("Board ID must be positive");
   if (existsSync(outputPath))
@@ -78,12 +81,12 @@ export const migrate = (
         ?.quick_check !== "ok"
     )
       throw new Error("Legacy database integrity check failed");
-    if (
-      !source
-        .query<{ id: number }, [number]>("SELECT id FROM boards WHERE id=?")
-        .get(board)
-    )
-      throw new Error("Legacy board ID does not exist");
+    const selected = source
+      .query<{ workspace: string; slug: string }, [number]>(
+        "SELECT w.slug AS workspace,b.slug FROM boards b JOIN workspaces w ON w.id=b.workspace_id WHERE b.id=?",
+      )
+      .get(board);
+    if (!selected) throw new Error("Legacy board ID does not exist");
     const runs: LegacyRun[] = source
       .query<LegacyRun, [number, string]>(
         "SELECT rowid AS sequence,id,board_id,note_id,owner,project,mode,revision,scenario,attention,status,expires,target,snapshot,receipt,request,result,started FROM qa_runs WHERE board_id=? AND project=? ORDER BY rowid",
@@ -109,11 +112,24 @@ export const migrate = (
         "SELECT r.project,p.run,p.expires FROM qa_publications p JOIN qa_runs r ON r.id=p.run WHERE p.board_id=? AND r.project=?",
       )
       .all(board, project);
+    const cutoverAt: number = Date.now() - 1;
     if (!runs.length && !flows.length && !findings.length)
       throw new Error("Legacy board has no QA state; use QUAZ_BOOTSTRAP=empty");
     mkdirSync(dirname(outputPath), { recursive: true });
     target = new Database(outputPath, { create: true });
     State.prepare(target);
+    target.exec(
+      "CREATE TABLE qa_destination (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)",
+    );
+    target
+      .query("INSERT INTO qa_destination (id,value) VALUES (1,?)")
+      .run(`${origin}/${selected.workspace}/${selected.slug}`);
+    target.exec(
+      "CREATE TABLE qa_import (id INTEGER PRIMARY KEY CHECK(id=1), marker TEXT NOT NULL)",
+    );
+    target
+      .query("INSERT INTO qa_import (id,marker) VALUES (1,?)")
+      .run(randomUUID());
     target.transaction((): void => {
       for (const row of runs)
         target
@@ -156,7 +172,7 @@ export const migrate = (
       for (const row of findings)
         target
           ?.query(
-            "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result,verified_through) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result,verified_through,verified_at) VALUES (?,?,?,?,?,?,?,?)",
           )
           .run(
             row.project,
@@ -166,6 +182,7 @@ export const migrate = (
             row.fix,
             row.last_result,
             row.verified_through,
+            row.verified_through ? cutoverAt : 0,
           );
       for (const row of artifacts)
         target
@@ -212,15 +229,28 @@ if (import.meta.main) {
       output: { type: "string" },
       board: { type: "string" },
       project: { type: "string" },
+      tracker: { type: "string" },
     },
   }).values;
-  if (!args.source || !args.output || !args.board || !args.project)
+  if (
+    !args.source ||
+    !args.output ||
+    !args.board ||
+    !args.project ||
+    !args.tracker
+  )
     throw new Error(
-      "Usage: bun scripts/qa/import.ts --source DB --output DB --board ID --project ID",
+      "Usage: bun scripts/qa/import.ts --source DB --output DB --board ID --project ID --tracker URL",
     );
   console.log(
     JSON.stringify(
-      migrate(args.source, args.output, Number(args.board), args.project),
+      migrate(
+        args.source,
+        args.output,
+        Number(args.board),
+        args.project,
+        args.tracker,
+      ),
     ),
   );
 }

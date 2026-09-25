@@ -439,10 +439,6 @@ export const run = async (
     const fingerprint: string = source(project);
     const selectedRevision: string = await revision(project, input.runtime);
     const base: string = input.runtime?.image ?? (await Image.base());
-    const runner: Protocol.Runner = Protocol.runner.parse({
-      source: input.runtime?.revision ?? Image.source(),
-      image: /sha256:[a-f0-9]{64}$/.exec(base)?.[0],
-    });
     const temporary: string =
       input.runtime?.directory ?? input.output ?? join(ROOT, "artifacts/qa");
     await mkdir(temporary, { recursive: true });
@@ -450,7 +446,7 @@ export const run = async (
     const prefix: string = `qa-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const records: Protocol.Run[] = [];
     const attempts: string[] = [];
-    const image: string =
+    let image: string =
       input.runtime?.image ??
       (project.revision === "target"
         ? base
@@ -547,32 +543,6 @@ export const run = async (
     }
     let success: boolean = false;
     try {
-      for (let index: number = 0; index < input.testers; index++) {
-        active();
-        const began: Protocol.Begin = {
-          id: `${prefix}-${index + 1}`,
-          project: project.id,
-          mode: input.mode,
-          revision: selectedRevision,
-          runner,
-          scenario: input.scenarios[index % input.scenarios.length],
-          ...(input.attention ? { attention: input.attention } : {}),
-        };
-        const directory: string = join(scratch, began.id);
-        await mkdir(join(directory, "output"), { recursive: true });
-        await journal(
-          directory,
-          JSON.stringify({
-            isolated: true,
-            run: began,
-            error: "QA run interrupted before completion",
-          }),
-        );
-        attempts.push(directory);
-        records.push(
-          await client.request<Protocol.Run>("/runs", "POST", began),
-        );
-      }
       active();
       await command(
         ["docker", "info", "--format", "{{.ServerVersion}}"],
@@ -599,6 +569,40 @@ export const run = async (
           throw new Error(`QA image build failed; ${scratch}/build-error.log`);
         if (source(project) !== fingerprint)
           throw new Error("Source changed during the build");
+        image = await command(
+          ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+          project.root,
+        );
+      }
+      const runner: Protocol.Runner = Protocol.runner.parse({
+        source: input.runtime?.revision ?? Image.source(),
+        image: /sha256:[a-f0-9]{64}$/.exec(image)?.[0],
+      });
+      for (let index: number = 0; index < input.testers; index++) {
+        active();
+        const began: Protocol.Begin = {
+          id: `${prefix}-${index + 1}`,
+          project: project.id,
+          mode: input.mode,
+          revision: selectedRevision,
+          runner,
+          scenario: input.scenarios[index % input.scenarios.length],
+          ...(input.attention ? { attention: input.attention } : {}),
+        };
+        const directory: string = join(scratch, began.id);
+        await mkdir(join(directory, "output"), { recursive: true });
+        await journal(
+          directory,
+          JSON.stringify({
+            isolated: true,
+            run: began,
+            error: "QA run interrupted before completion",
+          }),
+        );
+        attempts.push(directory);
+        records.push(
+          await client.request<Protocol.Run>("/runs", "POST", began),
+        );
       }
       active();
       const dockerContext: string = input.runtime

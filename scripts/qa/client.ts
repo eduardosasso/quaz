@@ -25,6 +25,22 @@ const DOCUMENT_ID_LENGTH: number = 48;
 const SNAPSHOT_BYTES: number = 64 * 1024 * 1024;
 const digest = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
+const importMarker = (database: Database): string | null => {
+  if (
+    !database
+      .query(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='qa_import'",
+      )
+      .get()
+  )
+    return null;
+
+  return (
+    database
+      .query<{ marker: string }, []>("SELECT marker FROM qa_import WHERE id=1")
+      .get()?.marker ?? null
+  );
+};
 
 export type Client = {
   request: <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -144,14 +160,8 @@ export const open = async (
     } else if (process.env.QUAZ_BOOTSTRAP === "import" && existsSync(file)) {
       const source: Database = new Database(file);
       try {
-        if (
-          !source
-            .query(
-              "SELECT 1 FROM sqlite_master WHERE type='table' AND name='qa_runs'",
-            )
-            .get()
-        )
-          throw new Error("QUAZ_DB has no QA history to import");
+        if (!importMarker(source))
+          throw new Error("QUAZ_DB needs the Quaz legacy import marker");
         const bytes: Uint8Array = source.serialize();
         if (bytes.byteLength > SNAPSHOT_BYTES)
           throw new Error("Quaz authority snapshot is too large");
@@ -164,6 +174,19 @@ export const open = async (
         "Empty Quaz authority requires QUAZ_BOOTSTRAP=empty or QUAZ_BOOTSTRAP=import with an existing QUAZ_DB",
       );
     database = new Database(snapshot, { create: true });
+    if (process.env.QUAZ_BOOTSTRAP === "import" && lease.value.byteLength) {
+      if (!existsSync(file)) throw new Error("QUAZ_DB import file is missing");
+      const source: Database = new Database(file, { readonly: true });
+      try {
+        const expected: string | null = importMarker(source);
+        if (!expected || importMarker(database) !== expected)
+          throw new Error(
+            "Remote Quaz state does not match the requested legacy import",
+          );
+      } finally {
+        source.close();
+      }
+    }
     const state: State.State = State.open(database, tracker);
     state.db.exec(
       "CREATE TABLE IF NOT EXISTS qa_destination (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)",

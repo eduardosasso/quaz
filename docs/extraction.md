@@ -48,7 +48,8 @@ bun --no-env-file scripts/qa/import.ts \
   --source /path/to/overdew.db \
   --output /path/to/quaz-state.db \
   --board 123 \
-  --project rdltr
+  --project rdltr \
+  --tracker https://overdew.app
 ```
 
 Keep the old Overdew database as a rollback copy. Confirm the board ID and project ID before import. The command stops if the output exists or the source has no QA state.
