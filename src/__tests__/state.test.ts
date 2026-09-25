@@ -143,6 +143,7 @@ const begin = (mode: Protocol.Mode): Protocol.Begin => ({
   project: "sample",
   mode,
   revision,
+  runner: { source: revision, image: `sha256:${"b".repeat(64)}` },
   scenario: "empty",
 });
 const finding = (attachment: number): Protocol.Finding => ({

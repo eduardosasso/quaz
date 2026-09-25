@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import * as Client from "@qa/client";
+import * as Image from "@qa/image";
 import * as Lifecycle from "@qa/lifecycle";
 import type * as Project from "@qa/project";
 import * as Review from "@qa/review";
@@ -16,6 +17,7 @@ const RUN: Protocol.Run = {
   project: "sample-app",
   mode: "verify",
   revision: REVISION,
+  runner: null,
   scenario: "new-account",
   note_id: 10,
   board_id: 1,
@@ -209,6 +211,7 @@ describe("QA orchestration boundaries", (): void => {
           project: RUN.project,
           mode: RUN.mode,
           revision: RUN.revision,
+          runner: { source: REVISION, image: `sha256:${"b".repeat(64)}` },
           scenario: RUN.scenario,
         },
         finish,
@@ -338,7 +341,10 @@ describe("QA orchestration boundaries", (): void => {
       },
       upload: async (): Promise<number> => 1,
     };
-    const connection = spyOn(Client, "connect").mockReturnValue(tracking);
+    const connection = spyOn(Client, "open").mockResolvedValue(tracking);
+    const base = spyOn(Image, "base").mockResolvedValue(
+      `quaz:base@sha256:${"b".repeat(64)}`,
+    );
     const planning = spyOn(Lifecycle, "plan").mockImplementation(
       async (): Promise<Lifecycle.Plan> => {
         process.emit("SIGINT");
@@ -363,6 +369,7 @@ describe("QA orchestration boundaries", (): void => {
       expect(await Bun.file(marker).exists()).toBe(false);
     } finally {
       planning.mockRestore();
+      base.mockRestore();
       connection.mockRestore();
       executable.mockRestore();
       const artifacts: string = resolve(import.meta.dir, "../../artifacts/qa");
@@ -414,7 +421,10 @@ describe("QA orchestration boundaries", (): void => {
         throw new Error("No worker evidence exists");
       },
     };
-    const connection = spyOn(Client, "connect").mockReturnValue(tracking);
+    const connection = spyOn(Client, "open").mockResolvedValue(tracking);
+    const base = spyOn(Image, "base").mockResolvedValue(
+      `quaz:base@sha256:${"b".repeat(64)}`,
+    );
     try {
       await expect(
         Runner.run(
@@ -442,6 +452,7 @@ describe("QA orchestration boundaries", (): void => {
       }
       expect(records[0].status !== "running" || recoverable).toBe(true);
     } finally {
+      base.mockRestore();
       connection.mockRestore();
     }
   });

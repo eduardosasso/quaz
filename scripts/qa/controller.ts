@@ -339,6 +339,7 @@ export const start = async (
     throw new Error("Another controller owns this runtime volume");
   }
   let connected: boolean = false;
+  let opened: Client.Client | null = null;
   try {
     const project: Project.Project = Project.load(settings.project);
     const input: Runner.Options = {
@@ -368,7 +369,13 @@ export const start = async (
       attention: settings.attention,
     };
     Runner.validate(input);
-    const client: Client.Client = Client.connect(input.url, input.board, token);
+    const client: Client.Client = await Client.open(
+      input.url,
+      input.board,
+      token,
+      project.id,
+    );
+    opened = client;
     const destination: string = JSON.stringify({
       url: new URL(input.url).origin,
       board: input.board,
@@ -412,6 +419,7 @@ export const start = async (
             tickets: job.ticket ? [job.ticket] : undefined,
           },
           stopping,
+          client,
         );
       },
       recover: async (): Promise<void> => recovery(client, runtime.directory),
@@ -421,6 +429,7 @@ export const start = async (
     });
   } finally {
     try {
+      await opened?.close?.();
       if (connected) {
         await Docker.cleanup(runtime);
         await Docker.release(runtime);

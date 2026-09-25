@@ -74,6 +74,9 @@ test("card metadata updates after creation", async () => {
     if (method === "GET" && url.endsWith("/notes/8"))
       return Response.json(card);
     if (method === "PUT" && url.endsWith("/notes/8")) {
+      expect(new Headers(init?.headers).get("X-Board-Document-Lease")).toBe(
+        JSON.stringify({ key: "quaz-sample", owner: "owner", fence: 1 }),
+      );
       if (!(init?.body instanceof FormData))
         throw new Error("Card update needs form data");
       card.description = String(init.body.get("description"));
@@ -89,6 +92,7 @@ test("card metadata updates after creation", async () => {
     "owner/board",
     "token",
   );
+  tracker.bind?.("quaz-sample", "owner", 1);
   const created = await tracker.create("QA discover: sample", "test-key");
   const updated = await tracker.update(created.id, {
     title: "QA discover: sample",
@@ -208,5 +212,69 @@ test("lost update and reopen responses recover observed writes", async () => {
   expect(logs.map((line): string => JSON.parse(line).operation)).toEqual([
     "update",
     "reopen",
+  ]);
+});
+
+test("board document lease and snapshot use the generic API", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url: URL = new URL(String(input));
+    const method: string = init?.method ?? "GET";
+    calls.push(`${method} ${url.pathname}`);
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer token",
+    );
+    if (method === "POST" && url.pathname.endsWith("/lease"))
+      return Response.json({
+        version: 0,
+        value: "",
+        fence: 1,
+        expires: Date.now() + 60_000,
+      });
+    if (method === "PUT" && url.pathname.endsWith("/lease"))
+      return Response.json({ expires: Date.now() + 60_000 });
+    if (method === "DELETE" && url.pathname.endsWith("/lease"))
+      return new Response(null, { status: 204 });
+    if (method === "PUT" && url.pathname.endsWith("/quaz-sample")) {
+      const body = JSON.parse(String(init?.body)) as {
+        value: string;
+        version: number;
+      };
+      expect(body.value).toBe(Buffer.from("snapshot").toString("base64"));
+      expect(body.version).toBe(0);
+
+      return Response.json({ version: 1 });
+    }
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  const owner: string = crypto.randomUUID();
+  const lease = await tracker.document.claim("quaz-sample", owner, 60);
+  expect(lease?.version).toBe(0);
+  expect(
+    await tracker.document.renew("quaz-sample", owner, lease?.fence ?? 0, 60),
+  ).toBeGreaterThan(Date.now());
+  expect(
+    await tracker.document.write(
+      "quaz-sample",
+      owner,
+      lease?.fence ?? 0,
+      0,
+      new TextEncoder().encode("snapshot"),
+    ),
+  ).toBe(1);
+  await tracker.document.release("quaz-sample", owner, lease?.fence ?? 0);
+  expect(calls).toEqual([
+    "POST /api/boards/owner/board/documents/quaz-sample/lease",
+    "PUT /api/boards/owner/board/documents/quaz-sample/lease",
+    "PUT /api/boards/owner/board/documents/quaz-sample",
+    "DELETE /api/boards/owner/board/documents/quaz-sample/lease",
   ]);
 });

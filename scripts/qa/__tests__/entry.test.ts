@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as Client from "@qa/client";
+import type * as Client from "@qa/client";
 import * as Controller from "@qa/controller";
 import * as Entry from "@qa/entry";
 import * as Runner from "@qa/run";
@@ -76,10 +76,18 @@ test("controller recovery removes a stale Claude token", async () => {
   mkdirSync(credential, { recursive: true });
   writeFileSync(join(credential, "token"), "test-token");
   try {
-    await Controller.recovery(
-      Client.connect("https://tracker.example", "owner/board", "tracker-token"),
-      root,
-    );
+    const client: Client.Client = {
+      request: async <T>(): Promise<T> => {
+        throw new Error("Unexpected recovery request");
+      },
+      upload: async (): Promise<number> => {
+        throw new Error("Unexpected recovery upload");
+      },
+      comments: async (): Promise<string[]> => {
+        throw new Error("Unexpected recovery comments");
+      },
+    };
+    await Controller.recovery(client, root);
     expect(existsSync(credential)).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });

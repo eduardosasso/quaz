@@ -56,6 +56,13 @@ export const catalog = z
 export type Catalog = z.infer<typeof catalog>;
 export const key = z.string().regex(/^[a-z0-9][a-z0-9_-]{1,100}$/);
 export const revision = z.string().regex(/^[a-f0-9]{40,64}$/);
+export const runner = z
+  .object({
+    source: revision,
+    image: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  })
+  .strict();
+export type Runner = z.infer<typeof runner>;
 export const mode = z.enum(["discover", "verify", "smoke"]);
 export type Mode = z.infer<typeof mode>;
 export const begin = z
@@ -64,6 +71,7 @@ export const begin = z
     project: key,
     mode,
     revision,
+    runner,
     scenario: z.string().min(1).max(80),
     attention: z
       .string()
@@ -110,7 +118,8 @@ export const finish = z
   })
   .strict();
 export type Finish = z.infer<typeof finish>;
-export type Run = Begin & {
+export type Run = Omit<Begin, "runner"> & {
+  runner: Runner | null;
   note_id: number;
   board_id: number;
   owner: string;

@@ -57,6 +57,9 @@ builder:
 env:
   clear:
     QUAZ_ENVIRONMENT: <%= `bash scripts/qa/env.sh --print`.strip %>
+<% if !ENV["QUAZ_BOOTSTRAP"].to_s.empty? -%>
+    QUAZ_BOOTSTRAP: <%= ENV.fetch("QUAZ_BOOTSTRAP") %>
+<% end -%>
   secret:
     - OP_SERVICE_ACCOUNT_TOKEN
 

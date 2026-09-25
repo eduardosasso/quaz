@@ -17,6 +17,7 @@ export QUAZ_TRACKER_URL=https://your-tracker.example
 export QUAZ_TRACKER_BOARD=owner/board
 export QUAZ_TRACKER_TOKEN=your-api-token
 export QUAZ_DB=/path/to/quaz-state.db
+export QUAZ_BOOTSTRAP=empty
 bun --no-env-file run qa -- --mode smoke --project /path/to/project.json --output /path/docker-can-mount
 ```
 
@@ -29,7 +30,7 @@ Remote targets receive browser measurements without source files. The source det
 
 The older local source mode remains available for migration. It builds a Quaz image with app sources and starts the app inside each worker. New target integrations use the shared Quaz image.
 
-Use `--mode discover` for a guided review. The controller selects reported fixes for `--mode verify`. The current controller also keeps execution state in `QUAZ_DB`. Use one database per tracker board until the shared-state cutover is complete. The remaining state and recovery work is listed in `docs/extraction.md`.
+Use `--mode discover` for a guided review. The controller selects reported fixes for `--mode verify`. Overdew holds the shared run state in a generic board document. `QUAZ_DB` is only an import source on first start. Set `QUAZ_BOOTSTRAP=empty` for a new board. Remove that setting after the first snapshot is saved.
 
 ## Development
 
@@ -80,6 +81,7 @@ docker run --detach --name quaz-controller --restart unless-stopped \
   --env QUAZ_ENVIRONMENT=oideewasrzxrhplsrtvqlozjna \
   --env QUAZ_TRACKER_URL=https://your-tracker.example \
   --env QUAZ_TRACKER_BOARD=owner/board \
+  --env QUAZ_BOOTSTRAP=empty \
   "$image" controller --config "$project_dir/controller.json"
 ```
 

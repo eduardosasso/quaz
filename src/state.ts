@@ -32,6 +32,7 @@ type RunRow = Protocol.Run & {
   publish_lease: number | null;
   publish_held: string | null;
 };
+type RawRunRow = Omit<RunRow, "runner"> & { runner: string | null };
 type FindingRow = {
   project: string;
   fingerprint: string;
@@ -62,14 +63,14 @@ export type State = {
   finding: (note: number) => FindingRow | null;
 };
 
-export const open = (path: string, tracker: Tracker.Tracker): State => {
-  const db: Database = new Database(path, { create: true });
+export const prepare = (db: Database): void => {
   db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS qa_runs (
       id TEXT PRIMARY KEY, note_id INTEGER, board_id INTEGER NOT NULL DEFAULT 0,
       owner TEXT NOT NULL DEFAULT 'quaz', project TEXT NOT NULL, mode TEXT NOT NULL,
       revision TEXT NOT NULL, scenario TEXT NOT NULL, attention TEXT,
+      runner TEXT,
       status TEXT NOT NULL DEFAULT 'running', expires INTEGER NOT NULL,
       target INTEGER, snapshot INTEGER, receipt TEXT, request TEXT NOT NULL,
       result TEXT, started INTEGER, publish TEXT, publish_lease INTEGER,
@@ -130,12 +131,29 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
     db.exec("ALTER TABLE qa_runs ADD COLUMN publish_target_version INTEGER");
   if (!columns.has("publish_target_step"))
     db.exec("ALTER TABLE qa_runs ADD COLUMN publish_target_step TEXT");
+  if (!columns.has("runner"))
+    db.exec("ALTER TABLE qa_runs ADD COLUMN runner TEXT");
+};
+
+export const open = (
+  path: string | Database,
+  tracker: Tracker.Tracker,
+): State => {
+  const db: Database =
+    typeof path === "string" ? new Database(path, { create: true }) : path;
+  prepare(db);
+  const decode = (value: RawRunRow): RunRow => ({
+    ...value,
+    runner: value.runner
+      ? Protocol.runner.parse(JSON.parse(value.runner))
+      : null,
+  });
   const run = (id: string): RunRow => {
-    const value: RunRow | null = db
-      .query<RunRow, [string]>("SELECT * FROM qa_runs WHERE id=?")
+    const value: RawRunRow | null = db
+      .query<RawRunRow, [string]>("SELECT * FROM qa_runs WHERE id=?")
       .get(id);
     if (!value || value.note_id === null) throw new Error("QA run not found");
-    return value;
+    return decode(value);
   };
   const active = (id: string): RunRow => {
     const value: RunRow = run(id);
@@ -154,12 +172,13 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
       conflict("Run ID already has different inputs");
     if (!prior)
       db.query(
-        "INSERT INTO qa_runs (id,project,mode,revision,scenario,attention,expires,request) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO qa_runs (id,project,mode,revision,runner,scenario,attention,expires,request) VALUES (?,?,?,?,?,?,?,?,?)",
       ).run(
         input.id,
         input.project,
         input.mode,
         input.revision,
+        JSON.stringify(input.runner),
         input.scenario,
         input.attention ?? null,
         Date.now() + Protocol.LEASE_SECONDS * MILLISECONDS,
@@ -185,7 +204,7 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
       await tracker.update(noteId, {
         title: `QA ${input.mode}: ${input.project}`,
         tags: `${Protocol.TAG.run},project:${input.project}`,
-        description: `Run ${input.id}\nMode: ${input.mode}\nProject: ${input.project}\nStatus: running\nRevision: ${input.revision}`,
+        description: `Run ${input.id}\nMode: ${input.mode}\nProject: ${input.project}\nStatus: running\nRevision: ${input.revision}\nRunner source: ${input.runner.source}\nRunner image: ${input.runner.image}`,
       });
     return run(input.id);
   };
@@ -370,10 +389,11 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
     await records(project, await tracker.list());
     const now: number = Date.now();
     const expired: RunRow[] = db
-      .query<RunRow, [string, number]>(
+      .query<RawRunRow, [string, number]>(
         "SELECT * FROM qa_runs WHERE project=? AND status='running' AND expires<=?",
       )
-      .all(project, now);
+      .all(project, now)
+      .map(decode);
     for (const value of expired) {
       db.query(
         "UPDATE qa_runs SET status='expired' WHERE id=? AND status='running'",
@@ -420,10 +440,11 @@ export const open = (path: string, tracker: Tracker.Tracker): State => {
       },
     );
     const runs: RunRow[] = db
-      .query<RunRow, [string, number]>(
+      .query<RawRunRow, [string, number]>(
         "SELECT * FROM qa_runs WHERE project=? ORDER BY rowid DESC LIMIT ?",
       )
-      .all(project, HISTORY_LIMIT);
+      .all(project, HISTORY_LIMIT)
+      .map(decode);
     const selected: RunRow[] = revision
       ? runs.filter(
           (entry): boolean =>

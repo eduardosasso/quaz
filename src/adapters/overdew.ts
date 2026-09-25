@@ -22,6 +22,12 @@ const attachmentSchema = z.object({
   filename: z.string(),
 });
 const commentSchema = z.object({ body: z.string() });
+const leaseSchema = z.object({
+  version: z.number().int().nonnegative(),
+  value: z.string(),
+  fence: z.number().int().positive(),
+  expires: z.number().int().positive(),
+});
 const asCard = (
   raw: z.infer<typeof cardSchema>,
   comments: string[],
@@ -83,7 +89,7 @@ export const connect = (
   origin: string,
   board: string,
   token: string,
-): Tracker.Tracker => {
+): Tracker.Authority => {
   const url: URL = new URL(origin);
   if (!token || !/^[\w-]+\/[\w-]+$/.test(board) || url.username || url.password)
     throw new Error("A board and API token are required");
@@ -93,6 +99,7 @@ export const connect = (
   )
     throw new Error("Remote card API requires HTTPS");
   const endpoint: string = url.origin;
+  let leaseHeader: string | undefined;
   const request = async (
     path: string,
     method: string = "GET",
@@ -105,6 +112,7 @@ export const connect = (
       headers: {
         Authorization: `Bearer ${token}`,
         ...(key ? { "Idempotency-Key": key } : {}),
+        ...(leaseHeader ? { "X-Board-Document-Lease": leaseHeader } : {}),
       },
       redirect: "error",
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -147,7 +155,87 @@ export const connect = (
     if (!(await tracker.get(id)))
       throw new Error(`Card ${id} is unavailable on the selected board`);
   };
-  const tracker: Tracker.Tracker = {
+  const documentRequest = async (
+    key: string,
+    suffix: string,
+    method: string,
+    body?: unknown,
+  ): Promise<Response> => {
+    const response: Response = await fetch(
+      `${endpoint}/api/boards/${board}/documents/${encodeURIComponent(key)}${suffix}`,
+      {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        redirect: "error",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      },
+    );
+    if (!response.ok && response.status !== 409)
+      throw new Error(`Board document ${method} returned ${response.status}`);
+
+    return response;
+  };
+  const document: Tracker.Document = {
+    claim: async (key, owner, ttlSeconds): Promise<Tracker.Lease | null> => {
+      const response: Response = await documentRequest(key, "/lease", "POST", {
+        owner,
+        ttlSeconds,
+      });
+      if (response.status === 409) return null;
+      const value = leaseSchema.parse(await response.json());
+
+      return { ...value, value: Buffer.from(value.value, "base64") };
+    },
+    renew: async (key, owner, fence, ttlSeconds): Promise<number> => {
+      const response: Response = await documentRequest(key, "/lease", "PUT", {
+        owner,
+        fence,
+        ttlSeconds,
+      });
+      if (response.status === 409)
+        throw new Error("Board document lease changed");
+      const value = z
+        .object({ expires: z.number().int().positive() })
+        .parse(await response.json());
+
+      return value.expires;
+    },
+    write: async (key, owner, fence, version, value): Promise<number> => {
+      const response: Response = await documentRequest(key, "", "PUT", {
+        owner,
+        fence,
+        version,
+        value: Buffer.from(value).toString("base64"),
+      });
+      if (response.status === 409) throw new Error("Board document changed");
+      const saved = z
+        .object({ version: z.number().int().positive() })
+        .parse(await response.json());
+
+      return saved.version;
+    },
+    release: async (key, owner, fence): Promise<void> => {
+      const response: Response = await documentRequest(
+        key,
+        "/lease",
+        "DELETE",
+        {
+          owner,
+          fence,
+        },
+      );
+      if (response.status === 409)
+        throw new Error("Board document lease changed");
+    },
+  };
+  const tracker: Tracker.Authority = {
+    bind: (key: string, owner: string, fence: number): void => {
+      leaseHeader = JSON.stringify({ key, owner, fence });
+    },
     list: async (): Promise<Tracker.Card[]> => {
       const selected: number = await selectedBoard();
       const cards: Tracker.Card[] = [];
@@ -300,6 +388,7 @@ export const connect = (
     download: async (id: number): Promise<Uint8Array> =>
       new Uint8Array(await (await request(`/attachments/${id}`)).arrayBuffer()),
     attachmentUrl: (id: number): string => `${endpoint}/api/attachments/${id}`,
+    document,
   };
   return tracker;
 };

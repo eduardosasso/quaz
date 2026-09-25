@@ -721,7 +721,7 @@ export const publish = async (
       }
     if (expired) status = "superseded";
     await state.tracker.update(run.note_id, {
-      description: `Run ${id}\nProject: ${run.project}\nMode: ${run.mode}\nRevision: ${run.revision}\nStatus: ${status}\n\n${held ?? input.summary}\n\nReport:\n\n\`\`\`json\n${JSON.stringify({ ...input.report, ...(held ? { publication: { held, findings: input.findings, matching: input.matching } } : {}) }, null, 2)}\n\`\`\``,
+      description: `Run ${id}\nProject: ${run.project}\nMode: ${run.mode}\nRevision: ${run.revision}\n${run.runner ? `Runner source: ${run.runner.source}\nRunner image: ${run.runner.image}\n` : ""}Status: ${status}\n\n${held ?? input.summary}\n\nReport:\n\n\`\`\`json\n${JSON.stringify({ ...input.report, ...(held ? { publication: { held, findings: input.findings, matching: input.matching } } : {}) }, null, 2)}\n\`\`\``,
       ...(input.status === "failed" || held
         ? { tagsAdd: Protocol.TAG.attention }
         : {}),
