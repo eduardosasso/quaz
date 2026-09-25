@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { copyFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type * as Project from "@qa/project";
 import type { Browser, BrowserContext, Locator, Page } from "playwright";
@@ -10,6 +10,8 @@ const DESKTOP = { width: 1440, height: 900 };
 const MOBILE = { width: 390, height: 844 };
 const LANDSCAPE = { width: 844, height: 390 };
 const SCENARIOS = ["empty", "typical", "busy"] as const;
+const FIXTURE_DIRECTORY: string = "/app/uploads/.quaz";
+const FIXTURE_PATH: string = join(FIXTURE_DIRECTORY, "fixture.ts");
 type Fixture = {
   storageState: Awaited<ReturnType<BrowserContext["storageState"]>>;
   username: string;
@@ -23,8 +25,10 @@ const seed = async (input: {
   runId: string;
   testerId: string;
 }): Promise<Fixture> => {
+  await mkdir(FIXTURE_DIRECTORY, { recursive: true });
+  await copyFile(join(import.meta.dir, "fixture.ts"), FIXTURE_PATH);
   const child = Bun.spawn(
-    [process.execPath, "--no-env-file", "/app/.quaz/fixture.ts", "--seed"],
+    [process.execPath, "--no-env-file", FIXTURE_PATH, "--seed"],
     {
       cwd: "/app",
       env: {

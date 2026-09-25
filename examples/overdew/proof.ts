@@ -14,6 +14,8 @@ for (const scenario of ["empty", "typical", "busy"] as const) {
       "--read-only",
       "--tmpfs",
       "/tmp:rw,size=512m",
+      "--tmpfs",
+      "/app/uploads:rw,nosuid,size=1g,mode=1777",
       "--memory",
       "2g",
       "--env",

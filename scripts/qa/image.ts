@@ -21,6 +21,7 @@ const SOURCES: string[] = [
   "package.json",
   "bun.lock",
   "tsconfig.json",
+  "Dockerfile",
   "Dockerfile.release",
   "src",
   "scripts",
@@ -32,12 +33,12 @@ const files = (path: string): string[] =>
         .sort()
         .flatMap((name: string): string[] => files(join(path, name)))
     : [path];
-export const source = (): string => {
+export const source = (root: string = ROOT): string => {
   const digest = createHash("sha256");
   for (const path of SOURCES.flatMap((entry: string): string[] =>
-    files(join(ROOT, entry)),
+    files(join(root, entry)),
   ))
-    digest.update(path.slice(ROOT.length)).update(readFileSync(path));
+    digest.update(path.slice(root.length)).update(readFileSync(path));
 
   return digest.digest("hex");
 };

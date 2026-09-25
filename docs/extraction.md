@@ -14,9 +14,9 @@ The current branch is a cutover candidate. The gaps below keep Overdew PR #208 i
 | `scripts/qa/config.json` | Same path | Adapted for Quaz image and controller defaults. |
 | `scripts/qa/fixtures/verification/{01.png,02.png,provenance.json,suite.json}` | Same paths | Moved unchanged. |
 | `scripts/qa/image.ts` | Same path | Adapted for a separate Quaz build context. |
-| `scripts/qa/Dockerfile`, `Dockerfile.dockerignore` | Root `Dockerfile`, `.dockerignore`, `examples/overdew/Dockerfile` | Separate Quaz and app build contexts. The merged Quaz image runs a generic target smoke test. |
+| `scripts/qa/Dockerfile`, `Dockerfile.dockerignore` | Root `Dockerfile`, `.dockerignore` | Separate Quaz and app build contexts. The merged Quaz image runs a generic target smoke test and all three disposable Overdew probes. |
 | `scripts/qa/project.ts`, `project.json`, `overdew.ts`, `fixture.ts` | `scripts/qa/project.ts`, `command.ts`, `examples/project.json`, `examples/overdew/adapter.ts`, `fixture.ts`, and project JSON files | The project contract is generic. The optional Overdew target adapter prepares disposable login and empty, typical, busy fixtures. |
-| `scripts/qa/local.ts`, `proof.ts`, `controller-proof.ts`, `controller.json` | `examples/overdew/probe.ts`, `proof.ts`, `controller.json`; controller proof pending | Generic target smoke, report publication, and controller restart pass in containers. Guided review and disposable Overdew proof remain open. |
+| `scripts/qa/local.ts`, `proof.ts`, `controller-proof.ts`, `controller.json` | `examples/overdew/probe.ts`, `proof.ts`, `controller.json`; guided Overdew proof pending | Generic target smoke, guided review, report publication, and controller restart pass in containers. Full Overdew controller smoke passes empty, typical, and busy. |
 | `docs/qa.md` | `docs/legacy-contract.md`, this map, `README.md` | Original acceptance contract retained. Current command documentation needs completion. |
 | `src/__tests__/qa-{controller,duplicates,eval-model,eval-split,eval,inspect.integration,orchestration,review,runner,verify-eval}.test.ts` | Same paths | Moved or adapted; tests pass. |
 | `src/__tests__/fixtures/qa-target.ts` | Same path | Moved sample target. |
@@ -41,7 +41,7 @@ Quaz can test any app with a project config and a target adapter. The target ada
 
 The `Tracker` interface stores run and finding cards, comments, and evidence. `src/adapters/overdew.ts` translates that interface to Overdew's generic HTTP API. This adapter is independent of the tested app. The same Overdew board can track work from several projects through `project:*` labels and machine records. Overdew does not interpret Quaz modes or QA labels.
 
-The board document now holds run history, flow claims, publication leases, and successful-verification order. The old controller must stop before import. Import reads the old Overdew database by board ID and project ID, then creates a Quaz SQLite file. Mount that file as `/qa/state.db` and start once with `QUAZ_BOOTSTRAP=import`. Check that Quaz saves and reopens the remote snapshot. Remove the bootstrap setting before the next deployment. Do not start the old controller again. Runner source and image digests are recorded separately from the tested app revision. Synthetic import, smoke, and restart pass with the merged image. Guided review and production migration remain open.
+The board document now holds run history, flow claims, publication leases, and successful-verification order. The old controller must stop before import. Import reads the old Overdew database by board ID and project ID, then creates a Quaz SQLite file. Mount that file as `/qa/state.db` and start once with `QUAZ_BOOTSTRAP=import`. Check that Quaz saves and reopens the remote snapshot. Remove the bootstrap setting before the next deployment. Do not start the old controller again. Runner source and image digests are recorded separately from the tested app revision. Synthetic import, generic guided review, and full Overdew smoke pass with the merged image. Guided Overdew review and production migration remain open.
 
 ```sh
 bun --no-env-file scripts/qa/import.ts \

@@ -1,5 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Image from "@qa/image";
@@ -33,6 +39,25 @@ test("image context copies only declared sources", async () => {
     (): Project.Project =>
       Project.schema.parse({ ...project, sources: ["../.env"] }),
   ).toThrow();
+});
+
+test("runner source includes the app build recipe", () => {
+  const folder: string = mkdtempSync(join(tmpdir(), "quaz-source-"));
+  folders.push(folder);
+  for (const name of ["src", "scripts", "examples"])
+    mkdirSync(join(folder, name));
+  for (const name of [
+    "package.json",
+    "bun.lock",
+    "tsconfig.json",
+    "Dockerfile.release",
+  ])
+    writeFileSync(join(folder, name), name);
+  const dockerfile: string = join(folder, "Dockerfile");
+  writeFileSync(dockerfile, "FROM image-one");
+  const before: string = Image.source(folder);
+  writeFileSync(dockerfile, "FROM image-two");
+  expect(Image.source(folder)).not.toBe(before);
 });
 
 test("project adapter origin has no trailing slash", () => {

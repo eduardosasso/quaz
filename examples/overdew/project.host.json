@@ -1,7 +1,6 @@
 {
   "id": "overdew",
   "root": "../../../overdew",
-  "dockerfile": "Dockerfile",
   "sources": [
     "package.json",
     "bun.lock",
