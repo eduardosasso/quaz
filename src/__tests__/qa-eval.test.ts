@@ -353,6 +353,7 @@ test("orchestration hides labels, repeats grading, and records failures", async 
   const calls: Model.Input[] = [];
   const runner: Eval.Runner = async (input: Model.Input): Promise<unknown> => {
     calls.push(input);
+    if (input.directory.endsWith("audit")) return review();
     if (!input.directory.endsWith("reviewer")) return grade();
     expect(input.prompt).not.toContain("HIDDEN_");
     expect(input.prompt).not.toContain(sample.id);
@@ -367,7 +368,7 @@ test("orchestration hides labels, repeats grading, and records failures", async 
     },
     runner,
   );
-  expect(calls).toHaveLength(6);
+  expect(calls).toHaveLength(8);
   expect(Eval.problems(output)).toEqual([]);
   expect(
     JSON.parse(await readFile(join(root, "run/report.json"), "utf8")),

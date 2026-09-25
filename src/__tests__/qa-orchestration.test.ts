@@ -659,6 +659,7 @@ describe("QA orchestration boundaries", (): void => {
       const published: Protocol.Finish = await Lifecycle.publication(
         {
           status: "partial",
+          audit: { status: "complete" },
           assessment,
           validation,
           matching: {
@@ -687,6 +688,7 @@ describe("QA orchestration boundaries", (): void => {
       const held: Protocol.Finish = await Lifecycle.publication(
         {
           status: "partial",
+          audit: { status: "complete" },
           assessment,
           validation,
           matchingError: "Comparison timed out",

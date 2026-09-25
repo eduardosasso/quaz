@@ -115,7 +115,7 @@ test("default execution excludes holdout evidence and hidden labels", async (): 
   );
   expect(report.cases).toEqual(["calibration-case"]);
   expect(report.attempts).toHaveLength(2);
-  expect(calls).toHaveLength(6);
+  expect(calls).toHaveLength(8);
   for (const input of calls) {
     expect(
       input.images.map((image: Buffer): string => image.toString()),
@@ -144,8 +144,8 @@ test("eval defaults to the same design guidance as live review", async (): Promi
   expect(await readFile(join(output, "reviewer.md"), "utf8")).toBe(
     design.content,
   );
-  const reviewers: Model.Input[] = calls.filter(
-    (input: Model.Input): boolean => input.schema === Eval.reviewSchema,
+  const reviewers: Model.Input[] = calls.filter((input: Model.Input): boolean =>
+    input.directory.endsWith("reviewer"),
   );
   expect(reviewers).toHaveLength(2);
   for (const input of reviewers) {
@@ -169,8 +169,8 @@ test("a candidate override does not change the shared guidance", async (): Promi
   );
   expect(report.prompt).not.toBe(before.sha256);
   expect(await Review.design()).toEqual(before);
-  for (const input of calls.filter(
-    (input: Model.Input): boolean => input.schema === Eval.reviewSchema,
+  for (const input of calls.filter((input: Model.Input): boolean =>
+    input.directory.endsWith("reviewer"),
   )) {
     expect(input.prompt).toContain("Review the saved evidence.");
     expect(input.prompt).not.toContain(before.content);
@@ -197,7 +197,7 @@ test("explicit holdout and all selections keep duplicate scenes together", async
       selected.map((entry: Eval.Case): string => entry.id),
     );
     expect(report.attempts).toHaveLength(selected.length * 2);
-    expect(calls).toHaveLength(selected.length * 6);
+    expect(calls).toHaveLength(selected.length * 8);
     if (split === "holdout")
       expect(
         calls.every(

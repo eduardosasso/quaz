@@ -5,6 +5,20 @@ import { join } from "node:path";
 import type { Client } from "@qa/client";
 import * as Lifecycle from "@qa/lifecycle";
 import * as Review from "@qa/review";
+import type * as Protocol from "@/qa_protocol";
+
+test("discovery cannot publish without a completed visual audit", async () => {
+  const finished: Protocol.Finish = await Lifecycle.publication(
+    { audit: { status: "skipped", reason: "Short run" } },
+    { mode: "discover" } as Protocol.Run,
+    "/unused",
+    new Map(),
+    { ticket: null, deployment: null, result: null },
+  );
+  expect(finished.status).toBe("partial");
+  expect(finished.findings).toEqual([]);
+  expect(finished.summary).toContain("unpublished");
+});
 
 test("raw Claude logs never become tracker artifacts", async () => {
   const root: string = mkdtempSync(join(tmpdir(), "quaz-artifacts-"));

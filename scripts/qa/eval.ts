@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import * as Audit from "@qa/audit";
 import * as Claude from "@qa/eval-claude";
 import * as Model from "@qa/eval-model";
 import * as ReviewGuidance from "@qa/review";
@@ -546,6 +547,7 @@ export const execute = async (
     reviewSchema: z.toJSONSchema(reviewSchema),
     gradeSchema: z.toJSONSchema(gradeSchema),
     runner: hash(await readFile(import.meta.path)),
+    audit: hash(await readFile(join(import.meta.dir, "audit.ts"))),
     adapter: hash(
       await readFile(
         join(
@@ -554,6 +556,7 @@ export const execute = async (
         ),
       ),
     ),
+    provider: hash(await readFile(join(import.meta.dir, "provider.ts"))),
     guidanceLoader: hash(await readFile(join(import.meta.dir, "review.ts"))),
     codex,
     bun: Bun.version,
@@ -640,13 +643,23 @@ export const execute = async (
         status: "invalid",
       };
       try {
-        const result: Review = review(
+        const draft: Review = review(
           await selectedRunner({
             ...settings,
             prompt: reviewerPrompt(prompt, sample.context),
             images,
             schema: reviewSchema,
             directory: join(directory, "reviewer"),
+          }),
+          images.length,
+        );
+        const result: Review = review(
+          await selectedRunner({
+            ...settings,
+            prompt: Audit.prompt(sample.context, draft),
+            images,
+            schema: reviewSchema,
+            directory: join(directory, "audit"),
           }),
           images.length,
         );
