@@ -9,9 +9,12 @@
     "test": "bun --no-env-file test",
     "qa": "bun --no-env-file scripts/qa/run.ts",
     "qa:controller": "bun --no-env-file scripts/qa/controller.ts",
-    "qa:eval": "bun --no-env-file scripts/qa/eval.ts"
+    "qa:eval": "bun --no-env-file scripts/qa/eval.ts",
+    "qa:eval:verify": "bun --no-env-file scripts/qa/verify-eval.ts",
+    "ship": "bash scripts/deploy.sh"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.1",
     "playwright": "^1.63.0",
     "zod": "^4.6.5"
   },

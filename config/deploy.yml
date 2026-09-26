@@ -1,0 +1,72 @@
+<% require "json" -%>
+<% project = ENV.fetch("QUAZ_PROJECT_ID") -%>
+<% directory = "/var/lib/quaz/#{project}" -%>
+<% job = !ENV["MERV_JOB"].to_s.empty? -%>
+<% versions = JSON.parse(File.read("scripts/qa/config.json")) -%>
+<% package = JSON.parse(File.read("package.json")) -%>
+service: quaz-<%= project %>
+image: eduardosasso/quaz
+primary_role: controller
+
+servers:
+  controller:
+    hosts:
+      - <%= job ? "127.0.0.1" : "omarchy" %>
+    proxy: false
+    cmd: controller --config <%= directory %>/controller.json
+    options:
+      cpus: "2"
+      memory: 3g
+      group-add: "<%= ENV.fetch("QUAZ_DOCKER_GID") %>"
+
+ssh:
+  user: root
+<% if job -%>
+  keys: ["~/.ssh/id_ed25519"]
+  keys_only: true
+<% end -%>
+
+registry:
+  server: ghcr.io
+  username: eduardosasso
+  password:
+    - GITHUB_TOKEN
+
+builder:
+  arch: amd64
+  dockerfile: Dockerfile.release
+<% if job -%>
+  local: true
+<% else -%>
+  remote: ssh://root@omarchy
+<% end -%>
+  args:
+    BUN_VERSION: <%= versions.fetch("bun") %>
+    CLAUDE_VERSION: <%= versions.fetch("claude") %>
+    IMPECCABLE_VERSION: <%= versions.fetch("impeccable") %>
+    IMPECCABLE_SHA256: <%= versions.fetch("impeccableSha256") %>
+    IMPECCABLE_ENGINE_VERSION: <%= versions.fetch("impeccableEngine") %>
+    IMPECCABLE_ENGINE_ARM64_SHA256: <%= versions.fetch("impeccableEngineArm64Sha256") %>
+    IMPECCABLE_ENGINE_X64_SHA256: <%= versions.fetch("impeccableEngineX64Sha256") %>
+    PLAYWRIGHT_MCP_VERSION: <%= versions.fetch("playwrightMcp") %>
+    DOCKER_VERSION: <%= versions.fetch("docker") %>
+    OP_VERSION: <%= versions.fetch("op") %>
+    SOURCE_REVISION: <%= `git rev-parse HEAD`.strip %>
+    IMAGE_VERSION: <%= package.fetch("version") %>
+
+env:
+  clear:
+    QUAZ_ENVIRONMENT: <%= `bash scripts/qa/env.sh --print`.strip %>
+<% if !ENV["QUAZ_BOOTSTRAP"].to_s.empty? -%>
+    QUAZ_BOOTSTRAP: <%= ENV.fetch("QUAZ_BOOTSTRAP") %>
+<% end -%>
+  secret:
+    - OP_SERVICE_ACCOUNT_TOKEN
+
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+  - quaz-<%= project %>-state:/qa
+  - <%= directory %>:<%= directory %>:ro
+
+readiness_delay: 10
+deploy_timeout: 60

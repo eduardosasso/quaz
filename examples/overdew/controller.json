@@ -1,0 +1,10 @@
+{
+  "project": "/var/lib/quaz/overdew/project.json",
+  "tracker": {
+    "url": "https://overdew.app",
+    "board": "eduardosasso/overdew"
+  },
+  "mode": "auto",
+  "parallel": 2,
+  "intervalSeconds": 300
+}

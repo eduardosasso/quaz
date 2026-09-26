@@ -1,0 +1,79 @@
+ARG BUN_VERSION
+ARG DOCKER_VERSION
+FROM docker:${DOCKER_VERSION}-cli AS docker
+FROM oven/bun:${BUN_VERSION} AS bun
+FROM debian:bookworm-slim
+
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends chromium bubblewrap socat ca-certificates curl unzip git gh fonts-noto-color-emoji \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG OP_VERSION
+COPY scripts/qa/install-op.sh /tmp/install-op.sh
+RUN sh /tmp/install-op.sh "${OP_VERSION}" && rm /tmp/install-op.sh
+
+ARG PLAYWRIGHT_MCP_VERSION
+WORKDIR /tools
+RUN bun add --exact @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}
+ENV PATH="/tools/node_modules/.bin:${PATH}"
+
+ARG CLAUDE_VERSION
+ARG IMPECCABLE_VERSION
+ARG IMPECCABLE_SHA256
+ARG IMPECCABLE_ENGINE_VERSION
+ARG IMPECCABLE_ENGINE_ARM64_SHA256
+ARG IMPECCABLE_ENGINE_X64_SHA256
+ARG TARGETARCH
+RUN useradd --create-home --shell /bin/bash quaz
+USER quaz
+ENV HOME=/home/quaz
+RUN curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_VERSION}"
+RUN curl -fsSL --retry 3 "https://github.com/pbakaus/impeccable/releases/download/skill-v${IMPECCABLE_VERSION}/universal.zip" -o /tmp/impeccable.zip \
+ && echo "${IMPECCABLE_SHA256}  /tmp/impeccable.zip" | sha256sum -c - \
+ && unzip -q /tmp/impeccable.zip '.claude/skills/impeccable/*' -d /home/quaz \
+ && rm /tmp/impeccable.zip
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      arm64) engine_arch=arm64; engine_sha="${IMPECCABLE_ENGINE_ARM64_SHA256}" ;; \
+      amd64) engine_arch=x64; engine_sha="${IMPECCABLE_ENGINE_X64_SHA256}" ;; \
+      *) echo "Unsupported Impeccable architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    skill=/home/quaz/.claude/skills/impeccable; \
+    curl -fsSL --retry 3 "https://github.com/pbakaus/impeccable/releases/download/engine-v${IMPECCABLE_ENGINE_VERSION}/impeccable-linux-${engine_arch}" -o /tmp/impeccable-engine; \
+    echo "${engine_sha}  /tmp/impeccable-engine" | sha256sum -c -; \
+    mkdir -p "${skill}/scripts/bin/linux-${engine_arch}"; \
+    install -m 755 /tmp/impeccable-engine "${skill}/scripts/bin/linux-${engine_arch}/impeccable"; \
+    rm /tmp/impeccable-engine
+USER root
+ENV PATH="/home/quaz/.local/bin:${PATH}"
+RUN claude --version
+RUN set -eu; \
+    test -f /home/quaz/.claude/skills/impeccable/SKILL.md; \
+    test -x /home/quaz/.claude/skills/impeccable/scripts/impeccable; \
+    for guide in critique audit polish layout typeset adapt; do \
+      test -f "/home/quaz/.claude/skills/impeccable/reference/${guide}.md"; \
+    done; \
+    ln -s /home/quaz/.claude/skills/impeccable /opt/impeccable
+ENV HOME=/tmp/home
+
+WORKDIR /quaz
+COPY package.json bun.lock tsconfig.json ./
+RUN bun install --frozen-lockfile --production
+COPY Dockerfile ./Dockerfile
+COPY Dockerfile.release ./Dockerfile.release
+COPY src ./src
+COPY scripts ./scripts
+COPY examples ./examples
+RUN bun --no-env-file -e 'import("./scripts/qa/inspect.ts").then((module) => { if (typeof module.inspect !== "function") process.exit(1) })'
+RUN mkdir -p /app/uploads
+
+ARG SOURCE_REVISION
+ARG IMAGE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/eduardosasso/quaz" \
+      org.opencontainers.image.revision=${SOURCE_REVISION} \
+      org.opencontainers.image.version=${IMAGE_VERSION}
+ENV QUAZ_DB=/qa/state.db
+ENTRYPOINT ["bun", "--no-env-file", "/quaz/scripts/qa/entry.ts"]
+CMD ["controller"]

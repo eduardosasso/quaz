@@ -23,6 +23,10 @@ const duration = z.number().int().positive();
 export const schema = z
   .object({
     project: z.string(),
+    tracker: z
+      .object({ url: z.url(), board: z.string().min(3) })
+      .strict()
+      .optional(),
     mode: z.enum(["auto", "discover", "verify", "smoke"]).default("auto"),
     parallel: z
       .number()
@@ -47,7 +51,7 @@ export const schema = z
       .max(CONFIG.maxSeconds)
       .default(CONFIG.seconds),
     scenarios: z.array(z.string()).min(1).optional(),
-    provider: z.enum(["codex"]).default("codex"),
+    provider: z.enum(["claude"]).default("claude"),
     model: z.string().optional(),
     attention: z.string().optional(),
   })
@@ -55,6 +59,15 @@ export const schema = z
 export type Settings = z.infer<typeof schema>;
 export type Job = { mode: Protocol.Mode; scenario: string; ticket?: number };
 export type Active = { job: Job; promise: Promise<void> };
+export const trackerToken = (env: NodeJS.ProcessEnv): string => {
+  const token: string = env.QUAZ_TRACKER_TOKEN ?? "";
+  if (!token)
+    throw new Error(
+      "Missing QUAZ_TRACKER_TOKEN; provide it at runtime or through QUAZ_ENVIRONMENT",
+    );
+
+  return token;
+};
 const failed = (run: Protocol.Run): boolean =>
   ["failed", "expired"].includes(run.status);
 export const timestamp = (run: Protocol.Run): number => {
@@ -149,32 +162,16 @@ export const plans = (
 export const recovery = async (
   client: Client.Client,
   directory: string,
-  input?: Runner.Options,
 ): Promise<void> => {
   const errors: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith("temporary-")) continue;
     const root: string = join(directory, entry.name);
     const children = await readdir(root, { withFileTypes: true });
-    const credentials: string[] = [];
     for (const child of children) {
       if (!child.isDirectory() || !child.name.startsWith("credential-"))
         continue;
       const path: string = join(root, child.name);
-      try {
-        if (
-          input &&
-          existsSync(`${path}.initial`) &&
-          existsSync(join(path, "auth.json"))
-        )
-          await Runner.restoreAuth(
-            input,
-            path,
-            await readFile(`${path}.initial`),
-          );
-      } catch (error: unknown) {
-        credentials.push(String(error));
-      }
       await rm(path, { recursive: true, force: true });
     }
     let pending: boolean = false;
@@ -183,21 +180,15 @@ export const recovery = async (
       if (!child.isDirectory() || !existsSync(join(path, "recovery.json")))
         continue;
       try {
-        if (credentials.length) {
-          await mkdir(join(path, "output"), { recursive: true });
-          await writeFile(
-            join(path, "output/credential-error.json"),
-            JSON.stringify({ errors: credentials }),
-          );
-        }
-        await Runner.recover(client, path);
-        await rm(path, { recursive: true });
+        const conclusion: Protocol.Finish = await Runner.recover(client, path);
+        if (conclusion.status === "complete")
+          await rm(path, { recursive: true });
+        else pending = true;
       } catch (error: unknown) {
         pending = true;
         errors.push(String(error));
       }
     }
-    errors.push(...credentials);
     if (!pending) await rm(root, { recursive: true });
   }
   if (errors.length)
@@ -336,6 +327,7 @@ export const start = async (
   signal: AbortSignal,
 ): Promise<void> => {
   const runtime: Docker.Runtime = await Docker.inspect();
+  const token: string = trackerToken(process.env);
   await mkdir(runtime.directory, { recursive: true });
   const lock = await open(
     join(runtime.directory, "controller.lock"),
@@ -347,6 +339,7 @@ export const start = async (
     throw new Error("Another controller owns this runtime volume");
   }
   let connected: boolean = false;
+  let opened: Client.Client | null = null;
   try {
     const project: Project.Project = Project.load(settings.project);
     const input: Runner.Options = {
@@ -357,10 +350,14 @@ export const start = async (
         "1",
         "--seconds",
         String(settings.seconds),
-        "--auth",
-        CONFIG.controller.auth,
-        "--skill",
-        CONFIG.controller.skill,
+        ...(settings.tracker
+          ? [
+              "--tracker",
+              settings.tracker.url,
+              "--board",
+              settings.tracker.board,
+            ]
+          : []),
         ...(settings.scenarios
           ? ["--scenarios", settings.scenarios.join(",")]
           : []),
@@ -372,11 +369,13 @@ export const start = async (
       attention: settings.attention,
     };
     Runner.validate(input);
-    const client: Client.Client = Client.connect(
+    const client: Client.Client = await Client.open(
       input.url,
       input.board,
-      process.env.QUAZ_TRACKER_TOKEN ?? "",
+      token,
+      project.id,
     );
+    opened = client;
     const destination: string = JSON.stringify({
       url: new URL(input.url).origin,
       board: input.board,
@@ -388,10 +387,10 @@ export const start = async (
         "Use a separate runtime volume for another tracking board or project",
       );
     await writeFile(path, destination, { mode: 0o600 });
-    const revision: string = await Runner.revision(project, runtime);
     await Docker.cleanup(runtime);
     await Docker.network(runtime);
     connected = true;
+    const revision: string = await Runner.revision(project);
     const log = (event: Record<string, unknown>): void =>
       console.log(JSON.stringify(event));
     log({
@@ -403,6 +402,7 @@ export const start = async (
     });
     await loop(settings, project, revision, signal, {
       state: async (): Promise<Protocol.State> => {
+        await Runner.checkRevision(project, revision);
         const state: Protocol.State = await client.request(
           `/state?project=${encodeURIComponent(project.id)}&revision=${revision}`,
         );
@@ -418,27 +418,23 @@ export const start = async (
             mode: job.mode,
             scenarios: [job.scenario],
             tickets: job.ticket ? [job.ticket] : undefined,
+            expectedRevision: revision,
           },
           stopping,
+          client,
         );
       },
-      recover: async (): Promise<void> =>
-        recovery(client, runtime.directory, input),
+      recover: async (): Promise<void> => recovery(client, runtime.directory),
       now: Date.now,
       wait,
       log,
     });
   } finally {
     try {
+      await opened?.close?.();
       if (connected) {
         await Docker.cleanup(runtime);
-        await Docker.command([
-          "network",
-          "disconnect",
-          runtime.network,
-          process.env.HOSTNAME ?? "",
-        ]);
-        await Docker.command(["network", "rm", runtime.network]);
+        await Docker.release(runtime);
       }
     } finally {
       await lock.close();

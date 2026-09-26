@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type * as Tracker from "@/tracker";
 
 const TIMEOUT_MS: number = 30_000;
 const PAGE_SIZE: number = 100;
+const MARKER_LENGTH: number = 32;
+const marker = (key: string): string =>
+  `[quaz:${createHash("sha256").update(key).digest("hex").slice(0, MARKER_LENGTH)}]`;
 const cardSchema = z.object({
   id: z.number().int().positive(),
   board_id: z.number().int().positive(),
@@ -18,6 +22,12 @@ const attachmentSchema = z.object({
   filename: z.string(),
 });
 const commentSchema = z.object({ body: z.string() });
+const leaseSchema = z.object({
+  version: z.number().int().nonnegative(),
+  value: z.string(),
+  fence: z.number().int().positive(),
+  expires: z.number().int().positive(),
+});
 const asCard = (
   raw: z.infer<typeof cardSchema>,
   comments: string[],
@@ -31,12 +41,55 @@ const asCard = (
   status: raw.status,
   comments,
 });
+const tags = (value: string): Set<string> =>
+  new Set(
+    value
+      .split(",")
+      .map((tag): string => tag.trim())
+      .filter(Boolean),
+  );
+const sameTags = (left: Set<string>, right: Set<string>): boolean =>
+  left.size === right.size && [...left].every((tag): boolean => right.has(tag));
+const sameText = (left: string, right: string): boolean =>
+  left.replaceAll("\r\n", "\n") === right.replaceAll("\r\n", "\n");
+const applied = (
+  before: Tracker.Card,
+  after: Tracker.Card,
+  changes: Tracker.Changes,
+): boolean => {
+  const expected: Set<string> = tags(changes.tags ?? before.tags);
+  for (const tag of tags(changes.tagsAdd ?? "")) expected.add(tag);
+  for (const tag of tags(changes.tagsRemove ?? "")) expected.delete(tag);
+
+  return (
+    after.version === before.version + 1 &&
+    after.title === (changes.title ?? before.title) &&
+    sameText(after.description, changes.description ?? before.description) &&
+    after.checklist === (changes.checklist ?? before.checklist) &&
+    sameTags(tags(after.tags), expected)
+  );
+};
+const recovered = (operation: string, id: number): void => {
+  console.error(
+    JSON.stringify({ event: "tracker-write-recovered", operation, card: id }),
+  );
+};
+const checkFailed = (operation: string, id: number, error: unknown): void => {
+  console.error(
+    JSON.stringify({
+      event: "tracker-recovery-check-failed",
+      operation,
+      card: id,
+      error: String(error),
+    }),
+  );
+};
 
 export const connect = (
   origin: string,
   board: string,
   token: string,
-): Tracker.Tracker => {
+): Tracker.Authority => {
   const url: URL = new URL(origin);
   if (!token || !/^[\w-]+\/[\w-]+$/.test(board) || url.username || url.password)
     throw new Error("A board and API token are required");
@@ -46,6 +99,7 @@ export const connect = (
   )
     throw new Error("Remote card API requires HTTPS");
   const endpoint: string = url.origin;
+  let leaseHeader: string | undefined;
   const request = async (
     path: string,
     method: string = "GET",
@@ -58,6 +112,7 @@ export const connect = (
       headers: {
         Authorization: `Bearer ${token}`,
         ...(key ? { "Idempotency-Key": key } : {}),
+        ...(leaseHeader ? { "X-Board-Document-Lease": leaseHeader } : {}),
       },
       redirect: "error",
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -74,12 +129,20 @@ export const connect = (
   let boardId: number | undefined;
   const selectedBoard = async (): Promise<number> => {
     if (boardId) return boardId;
-    const response: Response = await request(
-      `/boards/${board}/notes/search?limit=1`,
-    );
-    boardId = z
-      .object({ boardId: z.number().int().positive() })
-      .parse(await response.json()).boardId;
+    const response: Response = await request("/boards/destinations");
+    const boards = z
+      .array(
+        z.object({
+          id: z.number().int().positive(),
+          workspace: z.string(),
+          slug: z.string(),
+        }),
+      )
+      .parse(await response.json());
+    boardId = boards.find(
+      (entry): boolean => `${entry.workspace}/${entry.slug}` === board,
+    )?.id;
+    if (!boardId) throw new Error("Selected board is not writable");
     return boardId;
   };
   const parseCard = async (response: Response): Promise<Tracker.Card> => {
@@ -92,8 +155,89 @@ export const connect = (
     if (!(await tracker.get(id)))
       throw new Error(`Card ${id} is unavailable on the selected board`);
   };
-  const tracker: Tracker.Tracker = {
+  const documentRequest = async (
+    key: string,
+    suffix: string,
+    method: string,
+    body?: unknown,
+  ): Promise<Response> => {
+    const response: Response = await fetch(
+      `${endpoint}/api/boards/${board}/documents/${encodeURIComponent(key)}${suffix}`,
+      {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        redirect: "error",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      },
+    );
+    if (!response.ok && response.status !== 409)
+      throw new Error(`Board document ${method} returned ${response.status}`);
+
+    return response;
+  };
+  const document: Tracker.Document = {
+    claim: async (key, owner, ttlSeconds): Promise<Tracker.Lease | null> => {
+      const response: Response = await documentRequest(key, "/lease", "POST", {
+        owner,
+        ttlSeconds,
+      });
+      if (response.status === 409) return null;
+      const value = leaseSchema.parse(await response.json());
+
+      return { ...value, value: Buffer.from(value.value, "base64") };
+    },
+    renew: async (key, owner, fence, ttlSeconds): Promise<number> => {
+      const response: Response = await documentRequest(key, "/lease", "PUT", {
+        owner,
+        fence,
+        ttlSeconds,
+      });
+      if (response.status === 409)
+        throw new Error("Board document lease changed");
+      const value = z
+        .object({ expires: z.number().int().positive() })
+        .parse(await response.json());
+
+      return value.expires;
+    },
+    write: async (key, owner, fence, version, value): Promise<number> => {
+      const response: Response = await documentRequest(key, "", "PUT", {
+        owner,
+        fence,
+        version,
+        value: Buffer.from(value).toString("base64"),
+      });
+      if (response.status === 409) throw new Error("Board document changed");
+      const saved = z
+        .object({ version: z.number().int().positive() })
+        .parse(await response.json());
+
+      return saved.version;
+    },
+    release: async (key, owner, fence): Promise<void> => {
+      const response: Response = await documentRequest(
+        key,
+        "/lease",
+        "DELETE",
+        {
+          owner,
+          fence,
+        },
+      );
+      if (response.status === 409)
+        throw new Error("Board document lease changed");
+    },
+  };
+  const tracker: Tracker.Authority = {
+    bind: (key: string, owner: string, fence: number): void => {
+      leaseHeader = JSON.stringify({ key, owner, fence });
+    },
     list: async (): Promise<Tracker.Card[]> => {
+      const selected: number = await selectedBoard();
       const cards: Tracker.Card[] = [];
       let after: number = 0;
       while (true) {
@@ -101,7 +245,6 @@ export const connect = (
           .object({
             notes: z.array(cardSchema),
             nextCursor: z.number().int().nullable(),
-            boardId: z.number().int().positive(),
           })
           .parse(
             await (
@@ -110,7 +253,8 @@ export const connect = (
               )
             ).json(),
           );
-        boardId = page.boardId;
+        if (page.notes.some((raw): boolean => raw.board_id !== selected))
+          throw new Error("Card search returned a card from another board");
         cards.push(
           ...(await Promise.all(
             page.notes.map(
@@ -138,28 +282,28 @@ export const connect = (
       if (card.board_id !== (await selectedBoard())) return null;
       return asCard(card, await comments(id));
     },
-    create: async (
-      title: string,
-      changes: Tracker.Changes,
-      key: string,
-    ): Promise<Tracker.Card> => {
+    create: async (title: string, key: string): Promise<Tracker.Card> => {
+      const pendingTitle: string = `${title} ${marker(key)}`;
+      const prior: Tracker.Card | null = await tracker.recover(key);
+      if (prior) return prior;
       const form: FormData = new FormData();
-      form.set("content", title);
-      for (const [field, value] of Object.entries({
-        description: changes.description,
-        checklist: changes.checklist,
-        tags: changes.tags,
-      }))
-        if (value !== undefined) form.set(field, value);
+      form.set("content", pendingTitle);
+
       return parseCard(
         await request(`/boards/${board}/notes`, "POST", form, key),
       );
     },
+    recover: async (key: string): Promise<Tracker.Card | null> =>
+      (await tracker.list()).find((card): boolean =>
+        card.title.endsWith(marker(key)),
+      ) ?? null,
     update: async (
       id: number,
       changes: Tracker.Changes,
     ): Promise<Tracker.Card> => {
-      await guard(id);
+      const before: Tracker.Card | null = await tracker.get(id);
+      if (!before)
+        throw new Error(`Card ${id} is unavailable on the selected board`);
       const form: FormData = new FormData();
       const fields: Record<string, string | undefined> = {
         content: changes.title,
@@ -171,15 +315,43 @@ export const connect = (
       };
       for (const [key, value] of Object.entries(fields))
         if (value !== undefined) form.set(key, value);
-      return parseCard(await request(`/notes/${id}`, "PUT", form));
+      try {
+        return await parseCard(await request(`/notes/${id}`, "PUT", form));
+      } catch (error: unknown) {
+        try {
+          const current: Tracker.Card | null = await tracker.get(id);
+          if (current && applied(before, current, changes)) {
+            recovered("update", id);
+            return current;
+          }
+        } catch (checkError: unknown) {
+          checkFailed("update", id, checkError);
+        }
+        throw error;
+      }
     },
     complete: async (id: number): Promise<void> => {
       await guard(id);
       await request(`/notes/${id}/complete`, "PUT");
     },
     reopen: async (id: number): Promise<void> => {
-      await guard(id);
-      await request(`/notes/${id}/complete`, "DELETE");
+      const before: Tracker.Card | null = await tracker.get(id);
+      if (!before)
+        throw new Error(`Card ${id} is unavailable on the selected board`);
+      try {
+        await request(`/notes/${id}/complete`, "DELETE");
+      } catch (error: unknown) {
+        try {
+          const current: Tracker.Card | null = await tracker.get(id);
+          if (current?.status === 0 && current.version === before.version + 1) {
+            recovered("reopen", id);
+            return;
+          }
+        } catch (checkError: unknown) {
+          checkFailed("reopen", id, checkError);
+        }
+        throw error;
+      }
     },
     comment: async (id: number, body: string): Promise<void> => {
       await guard(id);
@@ -216,6 +388,7 @@ export const connect = (
     download: async (id: number): Promise<Uint8Array> =>
       new Uint8Array(await (await request(`/attachments/${id}`)).arrayBuffer()),
     attachmentUrl: (id: number): string => `${endpoint}/api/attachments/${id}`,
+    document,
   };
   return tracker;
 };

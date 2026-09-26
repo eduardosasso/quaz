@@ -2,12 +2,17 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { Browser, BrowserContext } from "playwright";
 import { z } from "zod";
+import * as Protocol from "@/qa_protocol";
 
-const loopback = z.url().refine((value: string): boolean => {
+const LOOPBACK_HOSTS: Set<string> = new Set([
+  "localhost",
+  "127.0.0.1",
+  "[::1]",
+]);
+const origin = z.url().refine((value: string): boolean => {
   const url: URL = new URL(value);
   return (
-    url.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+    ["https:", "http:"].includes(url.protocol) &&
     url.pathname === "/" &&
     !url.username &&
     !url.password &&
@@ -15,10 +20,22 @@ const loopback = z.url().refine((value: string): boolean => {
     !url.hash
   );
 });
+const contextPath = z.string().refine((value: string): boolean => {
+  if (!value.startsWith("/app/")) return false;
+
+  const relative: string = value.slice("/app/".length);
+  if (relative === "uploads" || relative.startsWith("uploads/")) return false;
+
+  return relative
+    .split("/")
+    .every(
+      (part: string): boolean => Boolean(part) && ![".", ".."].includes(part),
+    );
+}, "Context must stay inside /app");
 export const schema = z
   .object({
     id: z.string().regex(/^[a-z0-9][a-z0-9_-]+$/),
-    root: z.string(),
+    root: z.string().default("."),
     dockerfile: z.string().default(""),
     sources: z
       .array(
@@ -36,12 +53,12 @@ export const schema = z
             "Sources must stay inside the project root",
           ),
       )
-      .min(1),
+      .default([]),
     adapter: z.string().startsWith("/").default("/quaz/scripts/qa/command.ts"),
-    context: z.array(z.string().startsWith("/app/")).default([]),
+    context: z.array(contextPath).default([]),
     settings: z.record(z.string(), z.string()).default({}),
     scenarios: z.array(z.string().regex(/^[a-z0-9-]+$/)).min(1),
-    revision: z.enum(["git", "source"]).default("git"),
+    revision: z.enum(["git", "source", "target"]).default("git"),
     deployment: z
       .object({
         url: z.url(),
@@ -49,10 +66,38 @@ export const schema = z
           .string()
           .regex(/^[\w.-]+\/[\w.-]+$/)
           .optional(),
+        revision: z
+          .string()
+          .regex(/^[a-f0-9]{40,64}$/)
+          .optional(),
       })
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (project): boolean =>
+      project.revision === "target"
+        ? Boolean(project.deployment?.revision) && project.sources.length === 0
+        : project.sources.length > 0,
+    "Local targets need app sources; remote targets need a deployed revision",
+  )
+  .superRefine((value, issue): void => {
+    for (const path of value.context) {
+      const relative: string = path.slice("/app/".length);
+      if (
+        value.sources.some(
+          (source: string): boolean =>
+            relative === source || relative.startsWith(`${source}/`),
+        )
+      )
+        continue;
+      issue.addIssue({
+        code: "custom",
+        message: "Context must be included in staged project sources",
+        path: ["context"],
+      });
+    }
+  });
 export type Project = z.infer<typeof schema>;
 export type Prepared = {
   origin: string;
@@ -80,15 +125,77 @@ export type Adapter = {
 };
 export const load = (file: string): Project => {
   const value: Project = schema.parse(JSON.parse(readFileSync(file, "utf8")));
-  return { ...value, root: resolve(dirname(file), value.root) };
+  return {
+    ...value,
+    root: resolve(dirname(file), value.root),
+    dockerfile: value.dockerfile
+      ? resolve(dirname(file), value.dockerfile)
+      : "",
+  };
 };
-export const validate = (value: Prepared): Prepared => {
-  loopback.parse(value.origin);
-  if (
-    !value.entry.startsWith("/") ||
-    !value.ready.startsWith("/") ||
-    !value.command.length
-  )
+export const validate = (value: Prepared, project: Project): Prepared => {
+  origin.parse(value.origin);
+  if (!value.entry.startsWith("/") || !value.ready.startsWith("/"))
     throw new Error("Invalid project adapter result");
-  return value;
+
+  const address: URL = new URL(value.origin);
+  if (
+    project.revision !== "target" &&
+    (address.protocol !== "http:" ||
+      !LOOPBACK_HOSTS.has(address.hostname) ||
+      !value.command.length)
+  )
+    throw new Error("Local project adapter requires loopback and a command");
+  const normalized: string = address.origin;
+  if (
+    project.revision === "target" &&
+    (!project.deployment ||
+      normalized !== new URL(project.deployment.url).origin)
+  )
+    throw new Error("Project adapter origin differs from target deployment");
+
+  return { ...value, origin: normalized };
+};
+
+export const deployed = async (
+  project: Project,
+  request: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response> = fetch,
+): Promise<string | null> => {
+  if (!project.deployment) return null;
+  const response: Response = await request(project.deployment.url, {
+    method: "GET",
+    headers: { "Cache-Control": "no-cache" },
+    redirect: "error",
+    signal: AbortSignal.timeout(Protocol.REQUEST_MS),
+  });
+  if (!response.ok)
+    throw new Error(`Deployment probe returned ${response.status}`);
+
+  let revision: string | null = response.headers.get("x-quaz-revision");
+  if (!revision) {
+    const body: unknown = await response.json();
+    const parsed = z.object({ revision: z.string() }).safeParse(body);
+    revision = parsed.success ? parsed.data.revision : null;
+  }
+  const parsed = Protocol.revision.safeParse(revision);
+
+  return parsed.success ? parsed.data : null;
+};
+
+export const checkTarget = async (
+  project: Project,
+  request: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response> = fetch,
+): Promise<string> => {
+  if (project.revision !== "target" || !project.deployment?.revision)
+    throw new Error("Project has no deployed target revision");
+  if ((await deployed(project, request)) !== project.deployment.revision)
+    throw new Error("Target deployment revision does not match project config");
+
+  return project.deployment.revision;
 };

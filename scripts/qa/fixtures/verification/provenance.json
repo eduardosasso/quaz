@@ -1,0 +1,29 @@
+{
+  "source": "Disposable local QA accounts and data only. No production account content.",
+  "captures": [
+    {
+      "file": "01.png",
+      "revision": "fdf4682",
+      "screenshotAttachment": 334,
+      "eventsAttachment": 332,
+      "eventLines": [42],
+      "sha256": "3d2e22e8296e3751a33e59b1e98cfe5897d7e3c749ffcaa7e9612cad160c79fa"
+    },
+    {
+      "file": "02.png",
+      "revision": "0b73a1131cc4bbc524ad355693bc422bfe221dc5",
+      "screenshotAttachment": 356,
+      "eventsAttachment": 357,
+      "eventLines": [32, 36],
+      "sha256": "a1060561247755ce27a20ae15206bf4f910ece77d4cc034aba7af3d224b46138"
+    }
+  ],
+  "limits": "All cases are calibration from one known flow. The incomplete evidence case deliberately omits recorded measurements. Labels are author judgments, hidden from the model. The historical no-concealment contract stays a failure; the new readable-identity case has a different contract.",
+  "rubricReview": {
+    "version": "verification-judgment-2",
+    "case": "saved-no-concealment-contract",
+    "criterion": 3,
+    "priorLabel": false,
+    "reason": "Independent review accepts either interpretation of identity for this checklist item. Version 1 reports retain both disagreements. Version 2 records REVIEW, never an automatic pass, and still requires overall fail plus a failed name check. Saved ticket text and evidence are unchanged."
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "version": "verification-judgment-2",
+  "model": "gpt-6-astra",
+  "effort": "low",
+  "cases": [
+    {
+      "id": "readable-identity",
+      "images": ["02.png"],
+      "test": {
+        "expected": "Users can distinguish both agents and reach their Connect controls at 200% text.",
+        "acceptance": [
+          "Each saved agent can be distinguished by readable text in its row at 200% text.",
+          "Each Connect label and its whole button fit in the viewport after scrolling to the rows.",
+          "All four inset corners of each Connect button hit that button in the recorded hit test."
+        ],
+        "steps": [
+          "Open Account and expand Agents at 390x844.",
+          "Create Release Helper and Planning Assistant.",
+          "Double the previously captured computed font sizes once.",
+          "Scroll to both saved rows and inspect identity, labels, and hit areas."
+        ]
+      },
+      "observations": "Recorded local Chromium touch emulation at 390x844. Two agents were created: Release Helper and Planning Assistant. Every computed font size was captured, then doubled once. The Agents rows were scrolled into view. No successful Connect activation is recorded. Recorded DOM measurements after horizontal wheel input: {\"scroll\":[{\"top\":350,\"left\":0,\"clientWidth\":389,\"scrollWidth\":389}],\"rows\":[{\"text\":\"Release Helper\\n@release-helper\\nConnect\",\"rect\":{\"x\":1,\"y\":288.78125,\"width\":389,\"height\":193,\"right\":390,\"bottom\":481.78125},\"elements\":[{\"text\":\"Release Helper\",\"name\":null,\"rect\":{\"x\":101,\"y\":308.78125,\"width\":203.609375,\"height\":40,\"right\":304.609375,\"bottom\":348.78125},\"font\":\"32px\",\"clientWidth\":204,\"scrollWidth\":204,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Release Helper\",\"name\":null,\"rect\":{\"x\":101,\"y\":308.78125,\"width\":203.609375,\"height\":40,\"right\":304.609375,\"bottom\":348.78125},\"font\":\"28px\",\"clientWidth\":204,\"scrollWidth\":204,\"overflow\":\"hidden\",\"textOverflow\":\"ellipsis\"},{\"text\":\"\",\"name\":\"Rename Release Helper\",\"rect\":{\"x\":49,\"y\":400.78125,\"width\":56,\"height\":56,\"right\":105,\"bottom\":456.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":\"Delete Release Helper\",\"rect\":{\"x\":109,\"y\":400.78125,\"width\":56,\"height\":56,\"right\":165,\"bottom\":456.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Connect\",\"name\":\"Connect Release Helper\",\"rect\":{\"x\":185,\"y\":396.78125,\"width\":157,\"height\":64,\"right\":342,\"bottom\":460.78125},\"font\":\"28px\",\"clientWidth\":155,\"scrollWidth\":155,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]},{\"text\":\"Planning Assistant\\n@planning-assistant\\nConnect\",\"rect\":{\"x\":1,\"y\":482.78125,\"width\":389,\"height\":193,\"right\":390,\"bottom\":675.78125},\"elements\":[{\"text\":\"Planning Assistant\",\"name\":null,\"rect\":{\"x\":101,\"y\":502.78125,\"width\":241,\"height\":40,\"right\":342,\"bottom\":542.78125},\"font\":\"32px\",\"clientWidth\":241,\"scrollWidth\":241,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Planning Assistant\",\"name\":null,\"rect\":{\"x\":101,\"y\":502.78125,\"width\":241,\"height\":40,\"right\":342,\"bottom\":542.78125},\"font\":\"28px\",\"clientWidth\":241,\"scrollWidth\":252,\"overflow\":\"hidden\",\"textOverflow\":\"ellipsis\"},{\"text\":\"\",\"name\":\"Rename Planning Assistant\",\"rect\":{\"x\":49,\"y\":594.78125,\"width\":56,\"height\":56,\"right\":105,\"bottom\":650.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":\"Delete Planning Assistant\",\"rect\":{\"x\":109,\"y\":594.78125,\"width\":56,\"height\":56,\"right\":165,\"bottom\":650.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Connect\",\"name\":\"Connect Planning Assistant\",\"rect\":{\"x\":185,\"y\":590.78125,\"width\":157,\"height\":64,\"right\":342,\"bottom\":654.78125},\"font\":\"28px\",\"clientWidth\":155,\"scrollWidth\":155,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]},{\"text\":\"Add another\",\"rect\":{\"x\":1,\"y\":676.78125,\"width\":389,\"height\":112,\"right\":390,\"bottom\":788.78125},\"elements\":[{\"text\":\"Add another\",\"name\":null,\"rect\":{\"x\":49,\"y\":696.78125,\"width\":293,\"height\":64,\"right\":342,\"bottom\":760.78125},\"font\":\"28px\",\"clientWidth\":293,\"scrollWidth\":293,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":null,\"rect\":{\"x\":49,\"y\":696.78125,\"width\":64,\"height\":64,\"right\":113,\"bottom\":760.78125},\"font\":\"28px\",\"clientWidth\":62,\"scrollWidth\":62,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Add another\",\"name\":null,\"rect\":{\"x\":133,\"y\":708.78125,\"width\":163.125,\"height\":40,\"right\":296.125,\"bottom\":748.78125},\"font\":\"28px\",\"clientWidth\":163,\"scrollWidth\":163,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]}]} Recorded corner hit tests after a second horizontal wheel input: {\"scrollLeft\":0,\"connect\":[{\"name\":\"Connect Release Helper\",\"width\":157,\"height\":64,\"allCornersHit\":true},{\"name\":\"Connect Planning Assistant\",\"width\":157,\"height\":64,\"allCornersHit\":true}]}",
+      "labels": {
+        "verdict": "pass",
+        "checks": [true, true, true]
+      }
+    },
+    {
+      "id": "hidden-identity",
+      "images": ["01.png"],
+      "test": {
+        "expected": "Users can distinguish both saved agents at 200% text.",
+        "acceptance": [
+          "Each saved agent can be distinguished by readable text in its row at 200% text."
+        ],
+        "steps": [
+          "Open Account and expand Agents at 390x844.",
+          "Create Release Helper and Planning Assistant.",
+          "Double the previously captured computed font sizes once.",
+          "Scroll to both saved rows and inspect identity, labels, and hit areas."
+        ]
+      },
+      "observations": "Recorded local Chromium touch emulation at 390x844. Two agents were created: Release Helper and Planning Assistant. Every computed font size was captured, then doubled once. The Agents rows were scrolled into view. No successful Connect activation is recorded. Recorded DOM measurements after horizontal wheel input: {\"before\":[{\"text\":\"Release Helper@release-helper\",\"width\":0},{\"text\":\"Planning Assistant@planning-assistant\",\"width\":0}],\"buttons\":[{\"text\":\"Connect\",\"rect\":{\"x\":257,\"y\":462.78125,\"width\":208,\"height\":64,\"top\":462.78125,\"right\":465,\"bottom\":526.78125,\"left\":257}},{\"text\":\"Connect\",\"rect\":{\"x\":257,\"y\":576.78125,\"width\":208,\"height\":64,\"top\":576.78125,\"right\":465,\"bottom\":640.78125,\"left\":257}}],\"scroll\":[{\"scrollLeft\":0,\"width\":389,\"scrollWidth\":389},{\"scrollLeft\":0,\"width\":389,\"scrollWidth\":464},{\"scrollLeft\":0,\"width\":389,\"scrollWidth\":389}]}",
+      "labels": {
+        "verdict": "fail",
+        "checks": [false]
+      }
+    },
+    {
+      "id": "clipped-action",
+      "images": ["01.png"],
+      "test": {
+        "expected": "Users can see each complete Connect label and button at 200% text.",
+        "acceptance": [
+          "Each Connect label and its whole button fit in the viewport after scrolling to the rows."
+        ],
+        "steps": [
+          "Open Account and expand Agents at 390x844.",
+          "Create Release Helper and Planning Assistant.",
+          "Double the previously captured computed font sizes once.",
+          "Scroll to both saved rows and inspect identity, labels, and hit areas."
+        ]
+      },
+      "observations": "Recorded local Chromium touch emulation at 390x844. Two agents were created: Release Helper and Planning Assistant. Every computed font size was captured, then doubled once. The Agents rows were scrolled into view. No successful Connect activation is recorded. Recorded DOM measurements after horizontal wheel input: {\"before\":[{\"text\":\"Release Helper@release-helper\",\"width\":0},{\"text\":\"Planning Assistant@planning-assistant\",\"width\":0}],\"buttons\":[{\"text\":\"Connect\",\"rect\":{\"x\":257,\"y\":462.78125,\"width\":208,\"height\":64,\"top\":462.78125,\"right\":465,\"bottom\":526.78125,\"left\":257}},{\"text\":\"Connect\",\"rect\":{\"x\":257,\"y\":576.78125,\"width\":208,\"height\":64,\"top\":576.78125,\"right\":465,\"bottom\":640.78125,\"left\":257}}],\"scroll\":[{\"scrollLeft\":0,\"width\":389,\"scrollWidth\":389},{\"scrollLeft\":0,\"width\":389,\"scrollWidth\":464},{\"scrollLeft\":0,\"width\":389,\"scrollWidth\":389}]}",
+      "labels": {
+        "verdict": "fail",
+        "checks": [false]
+      }
+    },
+    {
+      "id": "full-name-contract",
+      "images": ["02.png"],
+      "test": {
+        "expected": "Both complete display names must be visible without ellipsis at 200% text.",
+        "acceptance": [
+          "Every character of each saved display name is visible without truncation.",
+          "Each Connect label and its whole button fit in the viewport after scrolling to the rows."
+        ],
+        "steps": [
+          "Open Account and expand Agents at 390x844.",
+          "Create Release Helper and Planning Assistant.",
+          "Double the previously captured computed font sizes once.",
+          "Scroll to both saved rows and inspect identity, labels, and hit areas."
+        ]
+      },
+      "observations": "Recorded local Chromium touch emulation at 390x844. Two agents were created: Release Helper and Planning Assistant. Every computed font size was captured, then doubled once. The Agents rows were scrolled into view. No successful Connect activation is recorded. Recorded DOM measurements after horizontal wheel input: {\"scroll\":[{\"top\":350,\"left\":0,\"clientWidth\":389,\"scrollWidth\":389}],\"rows\":[{\"text\":\"Release Helper\\n@release-helper\\nConnect\",\"rect\":{\"x\":1,\"y\":288.78125,\"width\":389,\"height\":193,\"right\":390,\"bottom\":481.78125},\"elements\":[{\"text\":\"Release Helper\",\"name\":null,\"rect\":{\"x\":101,\"y\":308.78125,\"width\":203.609375,\"height\":40,\"right\":304.609375,\"bottom\":348.78125},\"font\":\"32px\",\"clientWidth\":204,\"scrollWidth\":204,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Release Helper\",\"name\":null,\"rect\":{\"x\":101,\"y\":308.78125,\"width\":203.609375,\"height\":40,\"right\":304.609375,\"bottom\":348.78125},\"font\":\"28px\",\"clientWidth\":204,\"scrollWidth\":204,\"overflow\":\"hidden\",\"textOverflow\":\"ellipsis\"},{\"text\":\"\",\"name\":\"Rename Release Helper\",\"rect\":{\"x\":49,\"y\":400.78125,\"width\":56,\"height\":56,\"right\":105,\"bottom\":456.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":\"Delete Release Helper\",\"rect\":{\"x\":109,\"y\":400.78125,\"width\":56,\"height\":56,\"right\":165,\"bottom\":456.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Connect\",\"name\":\"Connect Release Helper\",\"rect\":{\"x\":185,\"y\":396.78125,\"width\":157,\"height\":64,\"right\":342,\"bottom\":460.78125},\"font\":\"28px\",\"clientWidth\":155,\"scrollWidth\":155,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]},{\"text\":\"Planning Assistant\\n@planning-assistant\\nConnect\",\"rect\":{\"x\":1,\"y\":482.78125,\"width\":389,\"height\":193,\"right\":390,\"bottom\":675.78125},\"elements\":[{\"text\":\"Planning Assistant\",\"name\":null,\"rect\":{\"x\":101,\"y\":502.78125,\"width\":241,\"height\":40,\"right\":342,\"bottom\":542.78125},\"font\":\"32px\",\"clientWidth\":241,\"scrollWidth\":241,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Planning Assistant\",\"name\":null,\"rect\":{\"x\":101,\"y\":502.78125,\"width\":241,\"height\":40,\"right\":342,\"bottom\":542.78125},\"font\":\"28px\",\"clientWidth\":241,\"scrollWidth\":252,\"overflow\":\"hidden\",\"textOverflow\":\"ellipsis\"},{\"text\":\"\",\"name\":\"Rename Planning Assistant\",\"rect\":{\"x\":49,\"y\":594.78125,\"width\":56,\"height\":56,\"right\":105,\"bottom\":650.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":\"Delete Planning Assistant\",\"rect\":{\"x\":109,\"y\":594.78125,\"width\":56,\"height\":56,\"right\":165,\"bottom\":650.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Connect\",\"name\":\"Connect Planning Assistant\",\"rect\":{\"x\":185,\"y\":590.78125,\"width\":157,\"height\":64,\"right\":342,\"bottom\":654.78125},\"font\":\"28px\",\"clientWidth\":155,\"scrollWidth\":155,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]},{\"text\":\"Add another\",\"rect\":{\"x\":1,\"y\":676.78125,\"width\":389,\"height\":112,\"right\":390,\"bottom\":788.78125},\"elements\":[{\"text\":\"Add another\",\"name\":null,\"rect\":{\"x\":49,\"y\":696.78125,\"width\":293,\"height\":64,\"right\":342,\"bottom\":760.78125},\"font\":\"28px\",\"clientWidth\":293,\"scrollWidth\":293,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":null,\"rect\":{\"x\":49,\"y\":696.78125,\"width\":64,\"height\":64,\"right\":113,\"bottom\":760.78125},\"font\":\"28px\",\"clientWidth\":62,\"scrollWidth\":62,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Add another\",\"name\":null,\"rect\":{\"x\":133,\"y\":708.78125,\"width\":163.125,\"height\":40,\"right\":296.125,\"bottom\":748.78125},\"font\":\"28px\",\"clientWidth\":163,\"scrollWidth\":163,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]}]} Recorded corner hit tests after a second horizontal wheel input: {\"scrollLeft\":0,\"connect\":[{\"name\":\"Connect Release Helper\",\"width\":157,\"height\":64,\"allCornersHit\":true},{\"name\":\"Connect Planning Assistant\",\"width\":157,\"height\":64,\"allCornersHit\":true}]}",
+      "labels": {
+        "verdict": "fail",
+        "checks": [false, true]
+      }
+    },
+    {
+      "id": "unmeasured-hit-area",
+      "images": ["02.png"],
+      "test": {
+        "expected": "Users can identify both agents and reach all corners of each Connect button.",
+        "acceptance": [
+          "Each saved agent can be distinguished by readable text in its row at 200% text.",
+          "All four inset corners of each Connect button hit that button in the recorded hit test."
+        ],
+        "steps": [
+          "Open Account and expand Agents at 390x844.",
+          "Create Release Helper and Planning Assistant.",
+          "Double the previously captured computed font sizes once.",
+          "Scroll to both saved rows and inspect identity, labels, and hit areas."
+        ]
+      },
+      "observations": "Only the attached screenshot is available. No DOM measurements, hit tests, pointer events, activation, or scroll observations are supplied.",
+      "labels": {
+        "verdict": "blocked",
+        "checks": [true, false]
+      }
+    },
+    {
+      "id": "saved-no-concealment-contract",
+      "images": ["02.png"],
+      "test": {
+        "expected": "Enlarged agent rows retain readable identity and fully reachable actions without concealing their content.",
+        "acceptance": [
+          "Both saved agent names remain readable at the reproduced 200% text setting.",
+          "Each Connect label and hit area can be brought fully into view.",
+          "Vertical scrolling to the rows does not leave identity or actions clipped."
+        ],
+        "steps": [
+          "Open Account and expand Agents at 390x844.",
+          "Create Release Helper and Planning Assistant.",
+          "Double the previously captured computed font sizes once.",
+          "Scroll to both saved rows and inspect identity, labels, and hit areas."
+        ]
+      },
+      "observations": "Recorded local Chromium touch emulation at 390x844. Two agents were created: Release Helper and Planning Assistant. Every computed font size was captured, then doubled once. The Agents rows were scrolled into view. No successful Connect activation is recorded. Recorded DOM measurements after horizontal wheel input: {\"scroll\":[{\"top\":350,\"left\":0,\"clientWidth\":389,\"scrollWidth\":389}],\"rows\":[{\"text\":\"Release Helper\\n@release-helper\\nConnect\",\"rect\":{\"x\":1,\"y\":288.78125,\"width\":389,\"height\":193,\"right\":390,\"bottom\":481.78125},\"elements\":[{\"text\":\"Release Helper\",\"name\":null,\"rect\":{\"x\":101,\"y\":308.78125,\"width\":203.609375,\"height\":40,\"right\":304.609375,\"bottom\":348.78125},\"font\":\"32px\",\"clientWidth\":204,\"scrollWidth\":204,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Release Helper\",\"name\":null,\"rect\":{\"x\":101,\"y\":308.78125,\"width\":203.609375,\"height\":40,\"right\":304.609375,\"bottom\":348.78125},\"font\":\"28px\",\"clientWidth\":204,\"scrollWidth\":204,\"overflow\":\"hidden\",\"textOverflow\":\"ellipsis\"},{\"text\":\"\",\"name\":\"Rename Release Helper\",\"rect\":{\"x\":49,\"y\":400.78125,\"width\":56,\"height\":56,\"right\":105,\"bottom\":456.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":\"Delete Release Helper\",\"rect\":{\"x\":109,\"y\":400.78125,\"width\":56,\"height\":56,\"right\":165,\"bottom\":456.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Connect\",\"name\":\"Connect Release Helper\",\"rect\":{\"x\":185,\"y\":396.78125,\"width\":157,\"height\":64,\"right\":342,\"bottom\":460.78125},\"font\":\"28px\",\"clientWidth\":155,\"scrollWidth\":155,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]},{\"text\":\"Planning Assistant\\n@planning-assistant\\nConnect\",\"rect\":{\"x\":1,\"y\":482.78125,\"width\":389,\"height\":193,\"right\":390,\"bottom\":675.78125},\"elements\":[{\"text\":\"Planning Assistant\",\"name\":null,\"rect\":{\"x\":101,\"y\":502.78125,\"width\":241,\"height\":40,\"right\":342,\"bottom\":542.78125},\"font\":\"32px\",\"clientWidth\":241,\"scrollWidth\":241,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Planning Assistant\",\"name\":null,\"rect\":{\"x\":101,\"y\":502.78125,\"width\":241,\"height\":40,\"right\":342,\"bottom\":542.78125},\"font\":\"28px\",\"clientWidth\":241,\"scrollWidth\":252,\"overflow\":\"hidden\",\"textOverflow\":\"ellipsis\"},{\"text\":\"\",\"name\":\"Rename Planning Assistant\",\"rect\":{\"x\":49,\"y\":594.78125,\"width\":56,\"height\":56,\"right\":105,\"bottom\":650.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":\"Delete Planning Assistant\",\"rect\":{\"x\":109,\"y\":594.78125,\"width\":56,\"height\":56,\"right\":165,\"bottom\":650.78125},\"font\":\"32px\",\"clientWidth\":56,\"scrollWidth\":56,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Connect\",\"name\":\"Connect Planning Assistant\",\"rect\":{\"x\":185,\"y\":590.78125,\"width\":157,\"height\":64,\"right\":342,\"bottom\":654.78125},\"font\":\"28px\",\"clientWidth\":155,\"scrollWidth\":155,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]},{\"text\":\"Add another\",\"rect\":{\"x\":1,\"y\":676.78125,\"width\":389,\"height\":112,\"right\":390,\"bottom\":788.78125},\"elements\":[{\"text\":\"Add another\",\"name\":null,\"rect\":{\"x\":49,\"y\":696.78125,\"width\":293,\"height\":64,\"right\":342,\"bottom\":760.78125},\"font\":\"28px\",\"clientWidth\":293,\"scrollWidth\":293,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"\",\"name\":null,\"rect\":{\"x\":49,\"y\":696.78125,\"width\":64,\"height\":64,\"right\":113,\"bottom\":760.78125},\"font\":\"28px\",\"clientWidth\":62,\"scrollWidth\":62,\"overflow\":\"visible\",\"textOverflow\":\"clip\"},{\"text\":\"Add another\",\"name\":null,\"rect\":{\"x\":133,\"y\":708.78125,\"width\":163.125,\"height\":40,\"right\":296.125,\"bottom\":748.78125},\"font\":\"28px\",\"clientWidth\":163,\"scrollWidth\":163,\"overflow\":\"visible\",\"textOverflow\":\"clip\"}]}]} Recorded corner hit tests after a second horizontal wheel input: {\"scrollLeft\":0,\"connect\":[{\"name\":\"Connect Release Helper\",\"width\":157,\"height\":64,\"allCornersHit\":true},{\"name\":\"Connect Planning Assistant\",\"width\":157,\"height\":64,\"allCornersHit\":true}]}",
+      "labels": {
+        "verdict": "fail",
+        "checks": [
+          false,
+          true,
+          {
+            "review": "The full handle preserves readable identity. The broader expected result also prohibits concealed content. Both checklist readings are defensible; independently review the explanation. The overall fail remains mandatory."
+          }
+        ]
+      }
+    }
+  ]
+}

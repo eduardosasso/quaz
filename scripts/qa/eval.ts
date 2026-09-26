@@ -2,14 +2,19 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import * as Audit from "@qa/audit";
+import CONFIG from "@qa/config.json";
+import * as Claude from "@qa/eval-claude";
 import * as Model from "@qa/eval-model";
 import * as ReviewGuidance from "@qa/review";
 import { z } from "zod";
 
 const REPEATS: number = 2;
 const JUDGES: number = 2;
+const JUDGE_ATTEMPTS: number = 2;
 const SECONDS: number = 300;
-const PARALLEL: number = 2;
+export const PARALLEL: number = 2;
+const CLAUDE_PARALLEL: number = 1;
 const SPLITS = ["calibration", "holdout", "all"] as const;
 export type Split = (typeof SPLITS)[number];
 const text = z.string().trim().min(1);
@@ -250,6 +255,45 @@ export const grade = (sample: Case, result: Review, value: unknown): Grade => {
 
   return judged;
 };
+export const judge = async (
+  runner: Runner,
+  input: Model.Input,
+  sample: Case,
+  result: Review,
+): Promise<Grade> => {
+  let feedback: string = "";
+  for (let attempt: number = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
+    let output: unknown;
+    try {
+      output = await runner({
+        ...input,
+        prompt: feedback
+          ? `${input.prompt}\nThe previous grade failed validation: ${feedback}. Copy expected and finding quotes exactly from the named finding. Copy unsupported quotes exactly from the review, including surface judgments and limitations. Use finding:null and quote:"" for a miss.`
+          : input.prompt,
+        directory: attempt === 1 ? input.directory : `${input.directory}-retry`,
+      });
+    } catch (error: unknown) {
+      if (!(error instanceof Model.InvalidOutputError)) throw error;
+      if (attempt === JUDGE_ATTEMPTS) throw error;
+      console.error(
+        `Visual grade schema invalid for ${sample.id}, attempt ${attempt}: ${String(error)}`,
+      );
+      feedback = error.message;
+      continue;
+    }
+    try {
+      return grade(sample, result, output);
+    } catch (error: unknown) {
+      if (attempt === JUDGE_ATTEMPTS) throw error;
+      console.error(
+        `Visual grade invalid for ${sample.id}, attempt ${attempt}: ${String(error)}`,
+      );
+      feedback = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  throw new Error("Visual grade did not complete");
+};
 const signature = (value: Grade): string =>
   JSON.stringify({
     expected: [...value.expected]
@@ -435,12 +479,22 @@ export const execute = async (
     repeats?: number;
     seconds?: number;
     split?: Split;
+    provider?: "codex" | "claude";
+    model?: string;
   },
   runner: Runner = Model.run,
 ): Promise<Report> => {
   const full = suiteSchema.parse(
     JSON.parse(await readFile(options.suite, "utf8")),
   );
+  const selectedRunner: Runner =
+    options.provider === "claude" ? Claude.run : runner;
+  const selectedSuite = {
+    ...full,
+    model:
+      options.model ??
+      (options.provider === "claude" ? CONFIG.claudeModel : full.model),
+  };
   const split: Split = z.enum(SPLITS).parse(options.split ?? "calibration");
   const allImages: Buffer[][] = await Promise.all(
     full.cases.map((sample) =>
@@ -452,7 +506,7 @@ export const execute = async (
     ),
   );
   const suite = partition(
-    full,
+    selectedSuite,
     allImages.map((images) => images.map(hash)),
     split,
   );
@@ -488,7 +542,7 @@ export const execute = async (
     (sample) => allImages[full.cases.indexOf(sample)],
   );
   let codex: string = "stub runner";
-  if (runner === Model.run) {
+  if (selectedRunner === Model.run) {
     const version = Bun.spawnSync(["codex", "--version"]);
     if (version.exitCode !== 0) throw new Error("Codex CLI unavailable");
     codex = version.stdout.toString().trim();
@@ -501,7 +555,16 @@ export const execute = async (
     reviewSchema: z.toJSONSchema(reviewSchema),
     gradeSchema: z.toJSONSchema(gradeSchema),
     runner: hash(await readFile(import.meta.path)),
-    adapter: hash(await readFile(join(import.meta.dir, "eval-model.ts"))),
+    audit: hash(await readFile(join(import.meta.dir, "audit.ts"))),
+    adapter: hash(
+      await readFile(
+        join(
+          import.meta.dir,
+          selectedRunner === Claude.run ? "eval-claude.ts" : "eval-model.ts",
+        ),
+      ),
+    ),
+    provider: hash(await readFile(join(import.meta.dir, "provider.ts"))),
     guidanceLoader: hash(await readFile(join(import.meta.dir, "review.ts"))),
     codex,
     bun: Bun.version,
@@ -588,8 +651,8 @@ export const execute = async (
         status: "invalid",
       };
       try {
-        const result: Review = review(
-          await runner({
+        const draft: Review = review(
+          await selectedRunner({
             ...settings,
             prompt: reviewerPrompt(prompt, sample.context),
             images,
@@ -598,16 +661,31 @@ export const execute = async (
           }),
           images.length,
         );
-        const judges: Grade[] = [];
-        for (let judge: number = 0; judge < JUDGES; judge++) {
-          const judged: unknown = await runner({
+        const result: Review = review(
+          await selectedRunner({
             ...settings,
-            prompt: `${JUDGE}\nContext supplied to reviewer: ${sample.context}\nHidden rubric:\n${json({ scope: sample.scope, expected: sample.expected, cautions: sample.cautions })}\nUntrusted review:\n${json(result)}`,
+            prompt: Audit.prompt(sample.context, draft),
             images,
-            schema: gradeSchema,
-            directory: join(directory, `judge-${judge + 1}`),
-          });
-          judges.push(grade(sample, result, judged));
+            schema: reviewSchema,
+            directory: join(directory, "audit"),
+          }),
+          images.length,
+        );
+        const judges: Grade[] = [];
+        for (let index: number = 0; index < JUDGES; index++) {
+          const judged: Grade = await judge(
+            selectedRunner,
+            {
+              ...settings,
+              prompt: `${JUDGE}\nContext supplied to reviewer: ${sample.context}\nHidden rubric:\n${json({ scope: sample.scope, expected: sample.expected, cautions: sample.cautions })}\nUntrusted review:\n${json(result)}`,
+              images,
+              schema: gradeSchema,
+              directory: join(directory, `judge-${index + 1}`),
+            },
+            sample,
+            result,
+          );
+          judges.push(judged);
         }
         attempt.metrics = metrics(judges);
         attempt.status = "complete";
@@ -629,7 +707,9 @@ export const execute = async (
       );
     }
   };
-  await Promise.all(Array.from({ length: PARALLEL }, lane));
+  const lanes: number =
+    selectedRunner === Claude.run ? CLAUDE_PARALLEL : PARALLEL;
+  await Promise.all(Array.from({ length: lanes }, lane));
   const regressions: string[] = baseline ? compare(baseline, report) : [];
   await writeFile(
     join(options.output, "summary.json"),
@@ -656,6 +736,8 @@ if (import.meta.main) {
         repeats: { type: "string" },
         seconds: { type: "string" },
         split: { type: "string", default: "calibration" },
+        provider: { type: "string", default: "codex" },
+        model: { type: "string" },
       },
     });
     if (!values.suite || !values.output)
@@ -670,6 +752,8 @@ if (import.meta.main) {
       repeats: values.repeats ? Number(values.repeats) : undefined,
       seconds: values.seconds ? Number(values.seconds) : undefined,
       split: z.enum(SPLITS).parse(values.split),
+      provider: z.enum(["codex", "claude"]).parse(values.provider),
+      model: values.model,
     });
     const failures: string[] = problems(report);
     console.log(
