@@ -84,6 +84,37 @@ const checkFailed = (operation: string, id: number, error: unknown): void => {
     }),
   );
 };
+const operations: WeakMap<Response, string> = new WeakMap();
+const send = async (
+  operation: string,
+  url: string,
+  init: RequestInit,
+): Promise<Response> => {
+  try {
+    const response: Response = await fetch(url, init);
+    operations.set(response, operation);
+    return response;
+  } catch (error: unknown) {
+    throw new Error(`${operation} failed: ${String(error)}`, { cause: error });
+  }
+};
+const read = async <T>(
+  response: Response,
+  parse: (response: Response) => Promise<T>,
+): Promise<T> => {
+  try {
+    return await parse(response);
+  } catch (error: unknown) {
+    throw new Error(
+      `${operations.get(response) ?? "API response"} failed: ${String(error)}`,
+      { cause: error },
+    );
+  }
+};
+const json = async (response: Response): Promise<unknown> =>
+  read(response, (value): Promise<unknown> => value.json());
+const bytes = async (response: Response): Promise<ArrayBuffer> =>
+  read(response, (value): Promise<ArrayBuffer> => value.arrayBuffer());
 
 export const connect = (
   origin: string,
@@ -106,17 +137,21 @@ export const connect = (
     body?: BodyInit,
     key?: string,
   ): Promise<Response> => {
-    const response: Response = await fetch(`${endpoint}/api${path}`, {
-      method,
-      body,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(key ? { "Idempotency-Key": key } : {}),
-        ...(leaseHeader ? { "X-Board-Document-Lease": leaseHeader } : {}),
+    const response: Response = await send(
+      `Card API ${method} ${path}`,
+      `${endpoint}/api${path}`,
+      {
+        method,
+        body,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(key ? { "Idempotency-Key": key } : {}),
+          ...(leaseHeader ? { "X-Board-Document-Lease": leaseHeader } : {}),
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
       },
-      redirect: "error",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
+    );
     if (!response.ok)
       throw new Error(`Card API ${method} ${path} returned ${response.status}`);
     return response;
@@ -124,7 +159,7 @@ export const connect = (
   const comments = async (id: number): Promise<string[]> =>
     z
       .array(commentSchema)
-      .parse(await (await request(`/notes/${id}/comments`)).json())
+      .parse(await json(await request(`/notes/${id}/comments`)))
       .map((entry): string => entry.body);
   let boardId: number | undefined;
   const selectedBoard = async (): Promise<number> => {
@@ -138,7 +173,7 @@ export const connect = (
           slug: z.string(),
         }),
       )
-      .parse(await response.json());
+      .parse(await json(response));
     boardId = boards.find(
       (entry): boolean => `${entry.workspace}/${entry.slug}` === board,
     )?.id;
@@ -146,7 +181,7 @@ export const connect = (
     return boardId;
   };
   const parseCard = async (response: Response): Promise<Tracker.Card> => {
-    const card = cardSchema.parse(await response.json());
+    const card = cardSchema.parse(await json(response));
     if (card.board_id !== (await selectedBoard()))
       throw new Error(`Card ${card.id} moved outside the selected board`);
     return asCard(card, await comments(card.id));
@@ -161,7 +196,8 @@ export const connect = (
     method: string,
     body?: unknown,
   ): Promise<Response> => {
-    const response: Response = await fetch(
+    const response: Response = await send(
+      `Board document ${method} /boards/${board}/documents/<key>${suffix}`,
       `${endpoint}/api/boards/${board}/documents/${encodeURIComponent(key)}${suffix}`,
       {
         method,
@@ -186,7 +222,7 @@ export const connect = (
         ttlSeconds,
       });
       if (response.status === 409) return null;
-      const value = leaseSchema.parse(await response.json());
+      const value = leaseSchema.parse(await json(response));
 
       return { ...value, value: Buffer.from(value.value, "base64") };
     },
@@ -200,7 +236,7 @@ export const connect = (
         throw new Error("Board document lease changed");
       const value = z
         .object({ expires: z.number().int().positive() })
-        .parse(await response.json());
+        .parse(await json(response));
 
       return value.expires;
     },
@@ -214,7 +250,7 @@ export const connect = (
       if (response.status === 409) throw new Error("Board document changed");
       const saved = z
         .object({ version: z.number().int().positive() })
-        .parse(await response.json());
+        .parse(await json(response));
 
       return saved.version;
     },
@@ -247,11 +283,11 @@ export const connect = (
             nextCursor: z.number().int().nullable(),
           })
           .parse(
-            await (
+            await json(
               await request(
                 `/boards/${board}/notes/search?status=active,completed,archived&after=${after}&limit=${PAGE_SIZE}`,
-              )
-            ).json(),
+              ),
+            ),
           );
         if (page.notes.some((raw): boolean => raw.board_id !== selected))
           throw new Error("Card search returned a card from another board");
@@ -268,17 +304,21 @@ export const connect = (
       }
     },
     get: async (id: number): Promise<Tracker.Card | null> => {
-      const response: Response = await fetch(`${endpoint}/api/notes/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        redirect: "error",
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+      const response: Response = await send(
+        `Card API GET /notes/${id}`,
+        `${endpoint}/api/notes/${id}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          redirect: "error",
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        },
+      );
       if (response.status === 404) return null;
       if (!response.ok)
         throw new Error(
           `Card API GET /notes/${id} returned ${response.status}`,
         );
-      const card = cardSchema.parse(await response.json());
+      const card = cardSchema.parse(await json(response));
       if (card.board_id !== (await selectedBoard())) return null;
       return asCard(card, await comments(id));
     },
@@ -372,7 +412,7 @@ export const connect = (
         new File([Uint8Array.from(bytes)], path, { type: mime }),
       );
       const raw = attachmentSchema.parse(
-        await (await request(`/notes/${id}/attachments`, "POST", form)).json(),
+        await json(await request(`/notes/${id}/attachments`, "POST", form)),
       );
       return { id: raw.id, name: raw.filename };
     },
@@ -380,13 +420,13 @@ export const connect = (
       await guard(id);
       return z
         .array(attachmentSchema)
-        .parse(await (await request(`/notes/${id}/attachments`)).json())
+        .parse(await json(await request(`/notes/${id}/attachments`)))
         .map(
           (item): Tracker.Attachment => ({ id: item.id, name: item.filename }),
         );
     },
     download: async (id: number): Promise<Uint8Array> =>
-      new Uint8Array(await (await request(`/attachments/${id}`)).arrayBuffer()),
+      new Uint8Array(await bytes(await request(`/attachments/${id}`))),
     attachmentUrl: (id: number): string => `${endpoint}/api/attachments/${id}`,
     document,
   };

@@ -45,6 +45,60 @@ test("moved card stays outside the selected board", async () => {
   expect(writes).toBe(0);
 });
 
+test("timeout names the card and document request", async () => {
+  globalThis.fetch = (async (
+    _input: RequestInfo | URL,
+    _init?: RequestInit,
+  ): Promise<Response> => {
+    throw new DOMException("The operation timed out.", "TimeoutError");
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  await expect(tracker.get(7)).rejects.toThrow(
+    "Card API GET /notes/7 failed: TimeoutError",
+  );
+  await expect(tracker.document.claim("state", "owner", 120)).rejects.toThrow(
+    "Board document POST /boards/owner/board/documents/<key>/lease failed: TimeoutError",
+  );
+});
+
+test("body timeout names the request and hides the document key", async () => {
+  globalThis.fetch = (async (
+    _input: RequestInfo | URL,
+    _init?: RequestInit,
+  ): Promise<Response> =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start: (controller): void => {
+          controller.error(
+            new DOMException("The operation timed out.", "TimeoutError"),
+          );
+        },
+      }),
+    )) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  await expect(tracker.get(7)).rejects.toThrow(
+    "Card API GET /notes/7 failed: TimeoutError",
+  );
+  let message: string = "";
+  try {
+    await tracker.document.claim("private-user-text", "owner", 120);
+  } catch (error: unknown) {
+    message = String(error);
+  }
+  expect(message).toContain(
+    "Board document POST /boards/owner/board/documents/<key>/lease failed: TimeoutError",
+  );
+  expect(message).not.toContain("private-user-text");
+});
+
 test("card metadata updates after creation", async () => {
   const calls: string[] = [];
   const card = {
