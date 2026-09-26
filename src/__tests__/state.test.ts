@@ -296,6 +296,28 @@ test("run card metadata retry reuses the created card", async () => {
   expect(cards.get(run.note_id)?.tags).toContain("qa-run");
 });
 
+test("finished run replay keeps its report", async () => {
+  const { state, cards } = fixture();
+  const input: Protocol.Begin = begin("smoke");
+  const run: Protocol.Run = await state.begin(input);
+  const result: Protocol.Finish = {
+    status: "failed",
+    summary: "Image build timed out",
+    report: { summary: "Image build timed out" },
+    findings: [],
+    evidence: [],
+    verdict: "none",
+    deployment: null,
+  };
+  await Finish.publish(state, run.id, result);
+  const report: Tracker.Card | undefined = cards.get(run.note_id);
+
+  expect(report?.description).toContain("Status: failed");
+  expect(report?.status).toBe(1);
+  expect((await state.begin(input)).status).toBe("failed");
+  expect(cards.get(run.note_id)).toEqual(report);
+});
+
 test("older untagged run cards stay out of the issue catalog", async () => {
   const { state, cards } = fixture();
   cards.set(42, {

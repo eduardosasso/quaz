@@ -193,9 +193,10 @@ export const open = (
         request,
       );
     const saved = db
-      .query<{ note_id: number | null; started: number | null }, [string]>(
-        "SELECT note_id,started FROM qa_runs WHERE id=?",
-      )
+      .query<
+        { note_id: number | null; started: number | null; status: string },
+        [string]
+      >("SELECT note_id,started,status FROM qa_runs WHERE id=?")
       .get(input.id);
     let noteId: number | null = saved?.note_id ?? null;
     if (!noteId) {
@@ -208,7 +209,7 @@ export const open = (
       ).run(card.id, input.id);
       noteId = card.id;
     }
-    if (!saved?.started)
+    if (!saved?.started && saved?.status === "running")
       await tracker.update(noteId, {
         title: `QA ${input.mode}: ${input.project}`,
         tags: `${Protocol.TAG.run},project:${input.project}`,
