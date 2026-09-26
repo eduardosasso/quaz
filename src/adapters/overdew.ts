@@ -5,6 +5,7 @@ import type * as Tracker from "@/tracker";
 
 const TIMEOUT_MS: number = 30_000;
 const PAGE_SIZE: number = 100;
+const COMMENT_CONCURRENCY: number = 8;
 const MARKER_LENGTH: number = 32;
 const marker = (key: string): string =>
   `[quaz:${createHash("sha256").update(key).digest("hex").slice(0, MARKER_LENGTH)}]`;
@@ -297,14 +298,25 @@ export const connect = (
           );
         if (page.notes.some((raw): boolean => raw.board_id !== selected))
           throw new Error("Card search returned a card from another board");
-        cards.push(
-          ...(await Promise.all(
-            page.notes.map(
-              async (raw): Promise<Tracker.Card> =>
-                asCard(raw, await comments(raw.id)),
-            ),
-          )),
-        );
+        for (
+          let index: number = 0;
+          index < page.notes.length;
+          index += COMMENT_CONCURRENCY
+        ) {
+          const batch: PromiseSettledResult<Tracker.Card>[] =
+            await Promise.allSettled(
+              page.notes
+                .slice(index, index + COMMENT_CONCURRENCY)
+                .map(
+                  async (raw): Promise<Tracker.Card> =>
+                    asCard(raw, await comments(raw.id)),
+                ),
+            );
+          for (const result of batch) {
+            if (result.status === "rejected") throw result.reason;
+            cards.push(result.value);
+          }
+        }
         if (page.nextCursor === null) return cards;
         after = page.nextCursor;
       }
