@@ -121,6 +121,21 @@ test("document transport errors do not expose the request URL", async () => {
     "Board document POST /boards/owner/board/documents/<key>/lease failed: TypeError",
   );
   expect(message).not.toContain("private-user-text");
+
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    _init?: RequestInit,
+  ): Promise<Response> => {
+    throw new Error(`Request failed: ${String(input)}`);
+  }) as typeof fetch;
+  try {
+    await tracker.document.claim("private-user-text", "owner", 120);
+  } catch (error: unknown) {
+    message = String(error);
+  }
+  expect(message).toBe(
+    "Error: Board document POST /boards/owner/board/documents/<key>/lease failed: Error",
+  );
 });
 
 test("card metadata updates after creation", async () => {
