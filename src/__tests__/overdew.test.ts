@@ -45,6 +45,109 @@ test("moved card stays outside the selected board", async () => {
   expect(writes).toBe(0);
 });
 
+test("card listing limits concurrent comment requests", async () => {
+  let active: number = 0;
+  let peak: number = 0;
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    _init?: RequestInit,
+  ): Promise<Response> => {
+    const url: string = String(input);
+    if (url.endsWith("/boards/destinations"))
+      return Response.json([{ id: 1, workspace: "owner", slug: "board" }]);
+    if (url.includes("/notes/search")) {
+      const after: number = Number(new URL(url).searchParams.get("after"));
+      return Response.json({
+        notes: Array.from(
+          { length: after === 0 ? 12 : 8 },
+          (_: undefined, index: number) => ({
+            id: after + index + 1,
+            board_id: 1,
+            version: 1,
+            content: `Card ${after + index + 1}`,
+            description: "",
+            checklist: "[]",
+            tags: "",
+            status: 0,
+          }),
+        ),
+        nextCursor: after === 0 ? 12 : null,
+      });
+    }
+    if (url.endsWith("/comments")) {
+      active++;
+      peak = Math.max(peak, active);
+      await Bun.sleep(5);
+      active--;
+      return Response.json([]);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  const cards = await tracker.list();
+  expect(cards.map((card): number => card.id)).toEqual(
+    Array.from({ length: 20 }, (_: undefined, index: number) => index + 1),
+  );
+  expect(peak).toBe(8);
+});
+
+test("failed comment batch finishes before listing retries", async () => {
+  let active: number = 0;
+  let peak: number = 0;
+  let fail: boolean = true;
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    _init?: RequestInit,
+  ): Promise<Response> => {
+    const url: string = String(input);
+    if (url.endsWith("/boards/destinations"))
+      return Response.json([{ id: 1, workspace: "owner", slug: "board" }]);
+    if (url.includes("/notes/search"))
+      return Response.json({
+        notes: Array.from({ length: 8 }, (_: undefined, index: number) => ({
+          id: index + 1,
+          board_id: 1,
+          version: 1,
+          content: `Card ${index + 1}`,
+          description: "",
+          checklist: "[]",
+          tags: "",
+          status: 0,
+        })),
+        nextCursor: null,
+      });
+    if (url.endsWith("/comments")) {
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        if (url.endsWith("/notes/4/comments") && fail) {
+          fail = false;
+          await Bun.sleep(1);
+          throw new Error("Comment request failed");
+        }
+        await Bun.sleep(20);
+        return Response.json([]);
+      } finally {
+        active--;
+      }
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  await expect(tracker.list()).rejects.toThrow("Comment request failed");
+  expect(active).toBe(0);
+  expect(await tracker.list()).toHaveLength(8);
+  expect(peak).toBe(8);
+});
+
 test("timeout names the card and document request", async () => {
   globalThis.fetch = (async (
     _input: RequestInfo | URL,
