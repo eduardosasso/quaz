@@ -4,7 +4,53 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import * as Bridge from "@qa/coverage";
 import * as Coverage from "@qa/coverage-mcp";
+
+test("bridge timeout names the request", async (): Promise<void> => {
+  const url: string | undefined = process.env.QA_BRIDGE_URL;
+  const token: string | undefined = process.env.QA_BRIDGE_TOKEN;
+  const disposable: string | undefined = process.env.QA_DISPOSABLE;
+  const fetcher: typeof fetch = globalThis.fetch;
+  try {
+    process.env.QA_BRIDGE_URL = "http://127.0.0.1";
+    process.env.QA_BRIDGE_TOKEN = "token";
+    process.env.QA_DISPOSABLE = "1";
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ): Promise<Response> => {
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    }) as typeof fetch;
+    await expect(Bridge.catalog()).rejects.toThrow(
+      "QA coverage /catalog failed: TimeoutError",
+    );
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ): Promise<Response> =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start: (controller): void => {
+            controller.error(
+              new DOMException("The operation timed out.", "TimeoutError"),
+            );
+          },
+        }),
+      )) as typeof fetch;
+    await expect(Bridge.catalog()).rejects.toThrow(
+      "QA coverage /catalog failed: TimeoutError",
+    );
+  } finally {
+    if (url === undefined) delete process.env.QA_BRIDGE_URL;
+    else process.env.QA_BRIDGE_URL = url;
+    if (token === undefined) delete process.env.QA_BRIDGE_TOKEN;
+    else process.env.QA_BRIDGE_TOKEN = token;
+    if (disposable === undefined) delete process.env.QA_DISPOSABLE;
+    else process.env.QA_DISPOSABLE = disposable;
+    globalThis.fetch = fetcher;
+  }
+});
 
 test("reviewer claims a flow through the scoped MCP tool", async () => {
   let claimed: string = "";

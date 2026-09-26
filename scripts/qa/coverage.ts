@@ -1,3 +1,4 @@
+import * as ErrorName from "@/error";
 import {
   type Catalog,
   catalog as catalogSchema,
@@ -9,18 +10,27 @@ const request = async <T>(path: string, body?: unknown): Promise<T> => {
   const token: string = process.env.QA_BRIDGE_TOKEN ?? "";
   if (!origin || !token || process.env.QA_DISPOSABLE !== "1")
     throw new Error("Coverage requires a scoped QA bridge");
-  const response: Response = await fetch(`${origin}${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    redirect: "error",
-    signal: AbortSignal.timeout(10_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${origin}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error: unknown) {
+    throw new Error(`QA coverage ${path} failed: ${ErrorName.describe(error)}`);
+  }
   if (!response.ok) throw new Error(`QA coverage returned ${response.status}`);
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch (error: unknown) {
+    throw new Error(`QA coverage ${path} failed: ${ErrorName.describe(error)}`);
+  }
 };
 export const catalog = async (): Promise<Catalog> =>
   catalogSchema.parse(await request<unknown>("/catalog"));
