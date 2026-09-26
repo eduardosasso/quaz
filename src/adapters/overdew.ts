@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import * as ErrorName from "@/error";
 import type * as Tracker from "@/tracker";
 
 const TIMEOUT_MS: number = 30_000;
@@ -84,18 +85,22 @@ const checkFailed = (operation: string, id: number, error: unknown): void => {
     }),
   );
 };
-const operations: WeakMap<Response, string> = new WeakMap();
+const operations: WeakMap<Response, { label: string; privateData: boolean }> =
+  new WeakMap();
 const send = async (
   operation: string,
   url: string,
   init: RequestInit,
+  privateData: boolean = false,
 ): Promise<Response> => {
   try {
     const response: Response = await fetch(url, init);
-    operations.set(response, operation);
+    operations.set(response, { label: operation, privateData });
     return response;
   } catch (error: unknown) {
-    throw new Error(`${operation} failed: ${String(error)}`, { cause: error });
+    throw new Error(
+      `${operation} failed: ${ErrorName.describe(error, privateData)}`,
+    );
   }
 };
 const read = async <T>(
@@ -105,9 +110,9 @@ const read = async <T>(
   try {
     return await parse(response);
   } catch (error: unknown) {
+    const operation = operations.get(response);
     throw new Error(
-      `${operations.get(response) ?? "API response"} failed: ${String(error)}`,
-      { cause: error },
+      `${operation?.label ?? "API response"} failed: ${ErrorName.describe(error, operation?.privateData)}`,
     );
   }
 };
@@ -209,6 +214,7 @@ export const connect = (
         redirect: "error",
         signal: AbortSignal.timeout(TIMEOUT_MS),
       },
+      true,
     );
     if (!response.ok && response.status !== 409)
       throw new Error(`Board document ${method} returned ${response.status}`);

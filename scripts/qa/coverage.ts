@@ -1,3 +1,4 @@
+import * as ErrorName from "@/error";
 import {
   type Catalog,
   catalog as catalogSchema,
@@ -22,17 +23,13 @@ const request = async <T>(path: string, body?: unknown): Promise<T> => {
       signal: AbortSignal.timeout(10_000),
     });
   } catch (error: unknown) {
-    throw new Error(`QA coverage ${path} failed: ${String(error)}`, {
-      cause: error,
-    });
+    throw new Error(`QA coverage ${path} failed: ${ErrorName.describe(error)}`);
   }
   if (!response.ok) throw new Error(`QA coverage returned ${response.status}`);
   try {
     return (await response.json()) as T;
   } catch (error: unknown) {
-    throw new Error(`QA coverage ${path} failed: ${String(error)}`, {
-      cause: error,
-    });
+    throw new Error(`QA coverage ${path} failed: ${ErrorName.describe(error)}`);
   }
 };
 export const catalog = async (): Promise<Catalog> =>

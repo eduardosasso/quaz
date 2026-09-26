@@ -99,6 +99,30 @@ test("body timeout names the request and hides the document key", async () => {
   expect(message).not.toContain("private-user-text");
 });
 
+test("document transport errors do not expose the request URL", async () => {
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    _init?: RequestInit,
+  ): Promise<Response> => {
+    throw new TypeError(`Request failed: ${String(input)}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  let message: string = "";
+  try {
+    await tracker.document.claim("private-user-text", "owner", 120);
+  } catch (error: unknown) {
+    message = String(error);
+  }
+  expect(message).toContain(
+    "Board document POST /boards/owner/board/documents/<key>/lease failed: TypeError",
+  );
+  expect(message).not.toContain("private-user-text");
+});
+
 test("card metadata updates after creation", async () => {
   const calls: string[] = [];
   const card = {
