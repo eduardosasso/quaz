@@ -212,101 +212,104 @@ test("source projects need a derived image", () => {
   ).toEqual({ tag: base, build: false });
 });
 
-test("deployment checks target source before startup", () => {
-  const folder: string = mkdtempSync(join(tmpdir(), "quaz-source-gate-"));
-  folders.push(folder);
-  const config: string = join(folder, "project.json");
-  const script: string = join(import.meta.dir, "../../source.py");
-  const check = (): ReturnType<typeof Bun.spawnSync> =>
-    Bun.spawnSync(["python3", script, config]);
-  writeFileSync(
-    config,
-    JSON.stringify({ root: "app", sources: ["app.ts"], revision: "source" }),
-  );
-  expect(check().exitCode).not.toBe(0);
-  mkdirSync(join(folder, "app"));
-  writeFileSync(join(folder, "app/app.ts"), "export const value = true;");
-  expect(check().exitCode).toBe(0);
-  writeFileSync(
-    config,
-    JSON.stringify({
-      root: "app",
-      dockerfile: "app/Dockerfile",
-      sources: ["app.ts"],
-      revision: "source",
-    }),
-  );
-  expect(check().exitCode).not.toBe(0);
-  writeFileSync(join(folder, "app/Dockerfile"), "FROM scratch");
-  expect(check().exitCode).toBe(0);
-  writeFileSync(
-    config,
-    JSON.stringify({
-      root: "app",
-      dockerfile: "app/Dockerfile",
-      sources: ["app.ts"],
-      revision: "git",
-    }),
-  );
-  expect(check().exitCode).not.toBe(0);
-  expect(
-    Bun.spawnSync(["git", "-C", join(folder, "app"), "init", "-q"]).exitCode,
-  ).toBe(0);
-  expect(
-    Bun.spawnSync([
+test.skipIf(Bun.which("python3") === null)(
+  "deployment checks target source before startup",
+  () => {
+    const folder: string = mkdtempSync(join(tmpdir(), "quaz-source-gate-"));
+    folders.push(folder);
+    const config: string = join(folder, "project.json");
+    const script: string = join(import.meta.dir, "../../source.py");
+    const check = (): ReturnType<typeof Bun.spawnSync> =>
+      Bun.spawnSync(["python3", script, config]);
+    writeFileSync(
+      config,
+      JSON.stringify({ root: "app", sources: ["app.ts"], revision: "source" }),
+    );
+    expect(check().exitCode).not.toBe(0);
+    mkdirSync(join(folder, "app"));
+    writeFileSync(join(folder, "app/app.ts"), "export const value = true;");
+    expect(check().exitCode).toBe(0);
+    writeFileSync(
+      config,
+      JSON.stringify({
+        root: "app",
+        dockerfile: "app/Dockerfile",
+        sources: ["app.ts"],
+        revision: "source",
+      }),
+    );
+    expect(check().exitCode).not.toBe(0);
+    writeFileSync(join(folder, "app/Dockerfile"), "FROM scratch");
+    expect(check().exitCode).toBe(0);
+    writeFileSync(
+      config,
+      JSON.stringify({
+        root: "app",
+        dockerfile: "app/Dockerfile",
+        sources: ["app.ts"],
+        revision: "git",
+      }),
+    );
+    expect(check().exitCode).not.toBe(0);
+    expect(
+      Bun.spawnSync(["git", "-C", join(folder, "app"), "init", "-q"]).exitCode,
+    ).toBe(0);
+    expect(
+      Bun.spawnSync([
+        "git",
+        "-C",
+        join(folder, "app"),
+        "add",
+        "app.ts",
+        "Dockerfile",
+      ]).exitCode,
+    ).toBe(0);
+    expect(
+      Bun.spawnSync([
+        "git",
+        "-C",
+        join(folder, "app"),
+        "-c",
+        "user.name=QA",
+        "-c",
+        "user.email=qa@example.test",
+        "commit",
+        "-qm",
+        "fixture",
+      ]).exitCode,
+    ).toBe(0);
+    expect(check().exitCode).toBe(0);
+    const commit: string = Bun.spawnSync([
       "git",
       "-C",
       join(folder, "app"),
-      "add",
-      "app.ts",
-      "Dockerfile",
-    ]).exitCode,
-  ).toBe(0);
-  expect(
-    Bun.spawnSync([
-      "git",
-      "-C",
-      join(folder, "app"),
-      "-c",
-      "user.name=QA",
-      "-c",
-      "user.email=qa@example.test",
-      "commit",
-      "-qm",
-      "fixture",
-    ]).exitCode,
-  ).toBe(0);
-  expect(check().exitCode).toBe(0);
-  const commit: string = Bun.spawnSync([
-    "git",
-    "-C",
-    join(folder, "app"),
-    "rev-parse",
-    "HEAD",
-  ])
-    .stdout.toString()
-    .trim();
-  const version: string = join(folder, "version.json");
-  writeFileSync(version, JSON.stringify({ revision: commit }));
-  writeFileSync(
-    config,
-    JSON.stringify({
-      root: "app",
-      dockerfile: "app/Dockerfile",
-      sources: ["app.ts"],
-      revision: "git",
-      deployment: { url: `file://${version}` },
-    }),
-  );
-  expect(check().exitCode).toBe(0);
-  writeFileSync(version, JSON.stringify({ revision: "a".repeat(40) }));
-  expect(check().exitCode).not.toBe(0);
-  writeFileSync(version, JSON.stringify({ revision: commit }));
-  writeFileSync(join(folder, "app/app.ts"), "export const value = false;");
-  expect(check().exitCode).not.toBe(0);
-  writeFileSync(config, JSON.stringify({ revision: "target" }));
-  expect(check().exitCode).toBe(0);
-});
+      "rev-parse",
+      "HEAD",
+    ])
+      .stdout.toString()
+      .trim();
+    const version: string = join(folder, "version.json");
+    writeFileSync(version, JSON.stringify({ revision: commit }));
+    writeFileSync(
+      config,
+      JSON.stringify({
+        root: "app",
+        dockerfile: "app/Dockerfile",
+        sources: ["app.ts"],
+        revision: "git",
+        deployment: { url: `file://${version}` },
+      }),
+    );
+    expect(check().exitCode).toBe(0);
+    writeFileSync(version, JSON.stringify({ revision: "a".repeat(40) }));
+    expect(check().exitCode).not.toBe(0);
+    writeFileSync(version, JSON.stringify({ revision: commit }));
+    writeFileSync(join(folder, "app/app.ts"), "export const value = false;");
+    expect(check().exitCode).not.toBe(0);
+    writeFileSync(config, JSON.stringify({ revision: "target" }));
+    expect(check().exitCode).toBe(0);
+  },
+);
 
 test("release workflow supplies every base image build argument", () => {
   const workflow: string = readFileSync(
