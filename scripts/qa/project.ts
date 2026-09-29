@@ -59,6 +59,7 @@ export const schema = z
     settings: z.record(z.string(), z.string()).default({}),
     scenarios: z.array(z.string().regex(/^[a-z0-9-]+$/)).min(1),
     revision: z.enum(["git", "source", "target"]).default("git"),
+    fetch: z.boolean().default(false),
     deployment: z
       .object({
         url: z.url(),
@@ -80,6 +81,14 @@ export const schema = z
         ? Boolean(project.deployment?.revision) && project.sources.length === 0
         : project.sources.length > 0,
     "Local targets need app sources; remote targets need a deployed revision",
+  )
+  .refine(
+    (project): boolean =>
+      !project.fetch ||
+      (project.revision === "git" &&
+        Boolean(project.deployment?.url) &&
+        Boolean(project.deployment?.repository)),
+    "Fetching source needs git revision, deployment url, and deployment repository",
   )
   .superRefine((value, issue): void => {
     for (const path of value.context) {

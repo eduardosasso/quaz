@@ -10,7 +10,7 @@ REQUEST_SECONDS = "10"
 
 def check(config: Path) -> None:
     project = json.loads(config.read_text())
-    if project.get("revision") == "target":
+    if project.get("revision") == "target" or project.get("fetch"):
         return
 
     root = (config.parent / project.get("root", ".")).resolve()

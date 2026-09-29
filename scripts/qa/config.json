@@ -30,6 +30,7 @@
   "minSeconds": 90,
   "maxSeconds": 1800,
   "cleanupSeconds": 10,
+  "fetchSeconds": 300,
   "browserCalls": 60,
   "writingSeconds": 90,
   "memory": "2g",

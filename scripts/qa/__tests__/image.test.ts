@@ -312,6 +312,28 @@ test.skipIf(Bun.which("python3") === null)(
   },
 );
 
+test.skipIf(Bun.which("python3") === null)(
+  "deployment checks skip sources the controller fetches",
+  () => {
+    const folder: string = mkdtempSync(join(tmpdir(), "quaz-source-fetch-"));
+    folders.push(folder);
+    const config: string = join(folder, "project.json");
+    const script: string = join(import.meta.dir, "../../source.py");
+    const check = (): ReturnType<typeof Bun.spawnSync> =>
+      Bun.spawnSync(["python3", script, config]);
+    const project = {
+      root: "missing",
+      sources: ["app.ts"],
+      revision: "git",
+      deployment: { url: "https://app.test/version", repository: "acme/app" },
+    };
+    writeFileSync(config, JSON.stringify(project));
+    expect(check().exitCode).not.toBe(0);
+    writeFileSync(config, JSON.stringify({ ...project, fetch: true }));
+    expect(check().exitCode).toBe(0);
+  },
+);
+
 test("release workflow supplies every base image build argument", () => {
   const workflow: string = readFileSync(
     join(import.meta.dir, "../../../.github/workflows/validate.yml"),

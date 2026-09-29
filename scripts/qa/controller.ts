@@ -15,6 +15,7 @@ import CONFIG from "@qa/config.json";
 import * as Docker from "@qa/docker";
 import * as Project from "@qa/project";
 import * as Runner from "@qa/run";
+import * as Source from "@qa/source";
 import { z } from "zod";
 import * as Storage from "@/local_storage_native";
 import * as Protocol from "@/qa_protocol";
@@ -239,7 +240,12 @@ export const follow =
   ): (() => Promise<string>) =>
   (): Promise<string> =>
     settle(
-      (): Promise<string> => Runner.revision(project, request),
+      async (): Promise<string> => {
+        if (project.fetch)
+          await Source.sync(project, dependencies.log, { request });
+
+        return Runner.revision(project, request);
+      },
       seconds,
       signal,
       dependencies,

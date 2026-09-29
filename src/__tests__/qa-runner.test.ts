@@ -44,6 +44,29 @@ describe("QA runner configuration", (): void => {
     ).toBe(false);
   });
 
+  test("fetching source needs a git deployment repository", (): void => {
+    const project = {
+      id: "sample",
+      root: "/qa/source",
+      sources: ["app.ts"],
+      scenarios: ["empty"],
+      fetch: true,
+      deployment: { url: "https://app.test/version", repository: "acme/app" },
+    };
+    expect(Project.schema.safeParse(project).success).toBe(true);
+    expect(Project.schema.parse({ ...project, fetch: undefined }).fetch).toBe(
+      false,
+    );
+    for (const changes of [
+      { revision: "source" },
+      { deployment: undefined },
+      { deployment: { url: "https://app.test/version" } },
+    ])
+      expect(Project.schema.safeParse({ ...project, ...changes }).success).toBe(
+        false,
+      );
+  });
+
   test("empty data is available without fixtures", (): void => {
     expect(
       options(["--scenarios", "empty", "--testers", "2"]).scenarios,
