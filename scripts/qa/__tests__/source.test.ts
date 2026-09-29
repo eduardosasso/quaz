@@ -152,6 +152,17 @@ test("resets dirty checkout", async (): Promise<void> => {
   expect(existsSync(join(project.root, "nested"))).toBe(false);
 });
 
+test("resets a dirty checkout already at the deployed commit without a token", async (): Promise<void> => {
+  const { project, events, spawned, options } = setup();
+  await Source.sync(project, (event) => events.push(event), options(newer));
+  writeFileSync(join(project.root, "app.txt"), "changed");
+  spawned.length = 0;
+  await Source.sync(project, (event) => events.push(event), options(newer, {}));
+  expect(fetches(spawned)).toBe(0);
+  expect(status(project)).toBe("");
+  expect(readFileSync(join(project.root, "app.txt"), "utf8")).toBe("two");
+});
+
 test("token by owner", (): void => {
   expect(Source.variable("tedstonne/overdew")).toBe(
     "QUAZ_SOURCE_TOKEN_TEDSTONNE",

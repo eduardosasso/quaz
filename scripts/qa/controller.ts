@@ -241,10 +241,11 @@ export const follow =
   (): Promise<string> =>
     settle(
       async (): Promise<string> => {
-        if (project.fetch)
-          await Source.sync(project, dependencies.log, { request });
+        const deployed: string | undefined = project.fetch
+          ? await Source.sync(project, dependencies.log, { request })
+          : undefined;
 
-        return Runner.revision(project, request);
+        return Runner.revision(project, request, deployed);
       },
       seconds,
       signal,

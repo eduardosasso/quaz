@@ -63,7 +63,7 @@ export const sync = async (
   project: Project.Project,
   log: (event: Record<string, unknown>) => void,
   options: Options = {},
-): Promise<void> => {
+): Promise<string> => {
   const { request, remote = github, git = spawn, env = process.env } = options;
   const repository: string | undefined = project.deployment?.repository;
   if (!project.fetch || !repository)
@@ -117,15 +117,19 @@ export const sync = async (
     "--porcelain",
     "--untracked-files=normal",
   ]);
-  if (from === deployed && !dirty) return;
+  if (from === deployed && !dirty) return deployed;
 
-  if (!token) throw new Error(`Missing ${name}; provide it at runtime`);
+  if (from !== deployed) {
+    if (!token) throw new Error(`Missing ${name}; provide it at runtime`);
 
-  await run(
-    ["fetch", "--depth", "1", "--no-tags", remote(repository), deployed],
-    authorization(token),
-  );
+    await run(
+      ["fetch", "--depth", "1", "--no-tags", remote(repository), deployed],
+      authorization(token),
+    );
+  }
   await run(["checkout", "--detach", "--force", deployed]);
   await run(["clean", "-ffdx"]);
   log({ event: "source-sync", project: project.id, from, to: deployed });
+
+  return deployed;
 };

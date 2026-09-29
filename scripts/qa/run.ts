@@ -149,6 +149,7 @@ export const revision = async (
     input: RequestInfo | URL,
     init?: RequestInit,
   ) => Promise<Response> = fetch,
+  deployed?: string,
 ): Promise<string> => {
   if (project.revision === "target")
     return Project.checkTarget(project, request).catch(
@@ -172,7 +173,7 @@ export const revision = async (
   );
   if (
     project.deployment &&
-    (await Project.deployed(project, request)) !== current
+    (deployed ?? (await Project.deployed(project, request))) !== current
   )
     throw new Drift("Project checkout does not match the deployed revision");
 
