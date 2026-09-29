@@ -582,6 +582,31 @@ describe("QA controller supervision", (): void => {
     );
     expect(names).not.toContain("run-error");
   });
+  test("bounded runs stopped by a revision change do not halt", async (): Promise<void> => {
+    await expect(
+      Controller.loop(
+        settings({ parallel: 1, runs: 1, attempts: 3 }),
+        PROJECT,
+        REVISION,
+        new AbortController().signal,
+        {
+          revision: async (): Promise<string> => REVISION,
+          state: async (): Promise<Protocol.State> => state(),
+          recover: async (): Promise<void> => {},
+          now: (): number => NOW,
+          wait: async (): Promise<void> => {
+            await Bun.sleep(1);
+          },
+          log: (): void => {},
+          execute: async (): Promise<void> => {
+            throw new Runner.Drift(
+              "Project revision changed during the QA run",
+            );
+          },
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
   test("a stale run waits before relaunching", async (): Promise<void> => {
     const stop = new AbortController();
     let calls: number = 0;

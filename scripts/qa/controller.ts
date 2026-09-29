@@ -340,7 +340,6 @@ export const loop = async (
               consecutiveFailures = 0;
             })
             .catch((error: unknown): void => {
-              failedRuns++;
               retryAfter =
                 dependencies.now() +
                 settings.retrySeconds * Backoff.MILLISECONDS;
@@ -353,6 +352,7 @@ export const loop = async (
                 });
                 return;
               }
+              failedRuns++;
               consecutiveFailures++;
               dependencies.log({
                 event: "run-error",
