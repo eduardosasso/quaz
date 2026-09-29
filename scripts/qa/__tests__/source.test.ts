@@ -18,6 +18,8 @@ const IDENTITY: string[] = [
   "user.name=QA",
   "-c",
   "user.email=qa@example.test",
+  "-c",
+  "commit.gpgsign=false",
 ];
 const folders: string[] = [];
 let remote: string = "";

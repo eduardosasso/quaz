@@ -371,6 +371,8 @@ describe("QA controller revision drift", (): void => {
           "user.name=QA",
           "-c",
           "user.email=qa@example.test",
+          "-c",
+          "commit.gpgsign=false",
           ...args,
         ],
         { cwd: root },

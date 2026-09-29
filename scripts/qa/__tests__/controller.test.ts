@@ -15,6 +15,8 @@ test("follow probes the deployment once per poll cycle for a fetch-enabled proje
         "user.name=QA",
         "-c",
         "user.email=qa@example.test",
+        "-c",
+        "commit.gpgsign=false",
         ...args,
       ],
       { cwd: root },
