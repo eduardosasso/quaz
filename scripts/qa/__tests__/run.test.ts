@@ -43,7 +43,7 @@ const dockerBinary = async (
 };
 
 describe("build-time source drift", (): void => {
-  test("staged image source mismatch raises Drift", async (): Promise<void> => {
+  test("staged image source mismatch raises Error when fetch is disabled", async (): Promise<void> => {
     const directory: string = await mkdtemp(join(tmpdir(), "quaz-run-drift-"));
     const staged: string = await mkdtemp(join(tmpdir(), "quaz-run-stage-"));
     const spawn: typeof Bun.spawn = Bun.spawn;
@@ -62,20 +62,23 @@ describe("build-time source drift", (): void => {
     const stage = spyOn(Image, "stage").mockResolvedValue(staged);
     try {
       const file: string = await project(directory);
-      await expect(
-        Runner.run(
-          Runner.options([
-            "--project",
-            file,
-            "--mode",
-            "smoke",
-            "--testers",
-            "1",
-          ]),
-          undefined,
-          client,
-        ),
-      ).rejects.toThrow("Staged QA image source differs");
+      const failure: unknown = await Runner.run(
+        Runner.options([
+          "--project",
+          file,
+          "--mode",
+          "smoke",
+          "--testers",
+          "1",
+        ]),
+        undefined,
+        client,
+      ).catch((error: unknown): unknown => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(Runner.Drift);
+      expect((failure as Error).message).toContain(
+        "Staged QA image source differs",
+      );
     } finally {
       stage.mockRestore();
       base.mockRestore();
@@ -85,7 +88,7 @@ describe("build-time source drift", (): void => {
     }
   });
 
-  test("source changed mid-build raises Drift", async (): Promise<void> => {
+  test("source changed mid-build raises Error when fetch is disabled", async (): Promise<void> => {
     const directory: string = await mkdtemp(join(tmpdir(), "quaz-run-drift-"));
     const spawn: typeof Bun.spawn = Bun.spawn;
     const docker: string = await dockerBinary(
@@ -101,20 +104,23 @@ describe("build-time source drift", (): void => {
     );
     try {
       const file: string = await project(directory);
-      await expect(
-        Runner.run(
-          Runner.options([
-            "--project",
-            file,
-            "--mode",
-            "smoke",
-            "--testers",
-            "1",
-          ]),
-          undefined,
-          client,
-        ),
-      ).rejects.toThrow("Source changed during the build");
+      const failure: unknown = await Runner.run(
+        Runner.options([
+          "--project",
+          file,
+          "--mode",
+          "smoke",
+          "--testers",
+          "1",
+        ]),
+        undefined,
+        client,
+      ).catch((error: unknown): unknown => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(Runner.Drift);
+      expect((failure as Error).message).toContain(
+        "Source changed during the build",
+      );
     } finally {
       base.mockRestore();
       executable.mockRestore();

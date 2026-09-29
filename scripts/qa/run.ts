@@ -595,7 +595,7 @@ export const run = async (
         active();
         const context: string = await Image.stage(project, scratch);
         if (source({ ...project, root: context }) !== fingerprint)
-          throw new Drift(
+          throw new (project.fetch ? Drift : Error)(
             "Staged QA image source differs from the project source",
           );
         const preparation = Bun.spawn(
@@ -610,7 +610,9 @@ export const run = async (
         if ((await preparation.exited) !== 0)
           throw new Error(`QA image build failed; ${scratch}/build-error.log`);
         if (source(project) !== fingerprint)
-          throw new Drift("Source changed during the build");
+          throw new (project.fetch ? Drift : Error)(
+            "Source changed during the build",
+          );
         if (
           projectImage(project, base, fingerprint, selectedRevision).tag !==
           planned.tag
