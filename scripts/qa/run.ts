@@ -149,6 +149,7 @@ export const revision = async (
     input: RequestInfo | URL,
     init?: RequestInit,
   ) => Promise<Response> = fetch,
+  deployed?: string,
 ): Promise<string> => {
   if (project.revision === "target")
     return Project.checkTarget(project, request).catch(
@@ -172,12 +173,18 @@ export const revision = async (
   );
   if (
     project.deployment &&
-    (await Project.deployed(project, request)) !== current
+    (deployed ?? (await Project.deployed(project, request))) !== current
   )
     throw new Drift("Project checkout does not match the deployed revision");
 
   return current;
 };
+const moved = async (
+  project: Project.Project,
+  expected: string,
+): Promise<boolean> =>
+  project.revision === "git" &&
+  (await command(["git", "rev-parse", "HEAD"], project.root)) !== expected;
 export const checkRevision = async (
   project: Project.Project,
   expected: string,
@@ -594,7 +601,7 @@ export const run = async (
         active();
         const context: string = await Image.stage(project, scratch);
         if (source({ ...project, root: context }) !== fingerprint)
-          throw new Error(
+          throw new ((await moved(project, selectedRevision)) ? Drift : Error)(
             "Staged QA image source differs from the project source",
           );
         const preparation = Bun.spawn(
@@ -609,7 +616,9 @@ export const run = async (
         if ((await preparation.exited) !== 0)
           throw new Error(`QA image build failed; ${scratch}/build-error.log`);
         if (source(project) !== fingerprint)
-          throw new Error("Source changed during the build");
+          throw new ((await moved(project, selectedRevision)) ? Drift : Error)(
+            "Source changed during the build",
+          );
         if (
           projectImage(project, base, fingerprint, selectedRevision).tag !==
           planned.tag

@@ -1,6 +1,6 @@
 {
   "id": "overdew",
-  "root": "/var/lib/quaz/overdew/source",
+  "root": "/qa/source",
   "sources": [
     "package.json",
     "bun.lock",
@@ -16,6 +16,7 @@
   "context": ["/app/PRODUCT.md", "/app/DESIGN.md"],
   "scenarios": ["empty", "typical", "busy"],
   "revision": "git",
+  "fetch": true,
   "deployment": {
     "url": "https://overdew.app/api/version",
     "repository": "tedstonne/overdew"

@@ -274,6 +274,8 @@ test.skipIf(Bun.which("python3") === null)(
         "user.name=QA",
         "-c",
         "user.email=qa@example.test",
+        "-c",
+        "commit.gpgsign=false",
         "commit",
         "-qm",
         "fixture",
@@ -308,6 +310,28 @@ test.skipIf(Bun.which("python3") === null)(
     writeFileSync(join(folder, "app/app.ts"), "export const value = false;");
     expect(check().exitCode).not.toBe(0);
     writeFileSync(config, JSON.stringify({ revision: "target" }));
+    expect(check().exitCode).toBe(0);
+  },
+);
+
+test.skipIf(Bun.which("python3") === null)(
+  "deployment checks skip sources the controller fetches",
+  () => {
+    const folder: string = mkdtempSync(join(tmpdir(), "quaz-source-fetch-"));
+    folders.push(folder);
+    const config: string = join(folder, "project.json");
+    const script: string = join(import.meta.dir, "../../source.py");
+    const check = (): ReturnType<typeof Bun.spawnSync> =>
+      Bun.spawnSync(["python3", script, config]);
+    const project = {
+      root: "missing",
+      sources: ["app.ts"],
+      revision: "git",
+      deployment: { url: "https://app.test/version", repository: "acme/app" },
+    };
+    writeFileSync(config, JSON.stringify(project));
+    expect(check().exitCode).not.toBe(0);
+    writeFileSync(config, JSON.stringify({ ...project, fetch: true }));
     expect(check().exitCode).toBe(0);
   },
 );
@@ -404,6 +428,8 @@ test("deployed Git revision must match the target checkout", async () => {
       "user.name=QA",
       "-c",
       "user.email=qa@example.test",
+      "-c",
+      "commit.gpgsign=false",
       "commit",
       "-qm",
       "fixture",

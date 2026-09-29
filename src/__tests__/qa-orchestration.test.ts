@@ -53,6 +53,7 @@ const PROJECT: Project.Project = {
   settings: {},
   scenarios: ["new-account"],
   revision: "source",
+  fetch: false,
 };
 const client = (tickets: Protocol.Ticket[] = [TICKET]): Client.Client => ({
   comments: async (): Promise<string[]> => [],

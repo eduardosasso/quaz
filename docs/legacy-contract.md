@@ -163,7 +163,7 @@ The tracking server must include the controller API update. The controller rejec
 Recent attempts are retained per mode and ticket, so unrelated runs cannot reset a ticket's retry limit.
 Review history remains in Overdew. Fixing the target and starting a new image revision permits a fresh retry budget.
 
-The controller tests the app revision packaged in its image. It does not fetch or update app source while running.
+The controller tests the app revision packaged in its image. It fetches or updates app source while running only when the project sets `fetch: true`.
 For deployed-fix checks, build from a clean Git checkout with the project set to `revision: "git"`.
 Mount a project file with `root: "/app"`, the correct adapter, and its deployment URL; point the controller configuration at it.
 Rebuild and replace the controller image when the target app changes. A mismatched revision stays pending in Overdew.

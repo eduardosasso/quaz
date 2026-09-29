@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as Backoff from "@qa/backoff";
@@ -28,6 +28,7 @@ const PROJECT: Project.Project = {
   settings: {},
   scenarios: ["empty", "typical", "busy"],
   revision: "source",
+  fetch: false,
 };
 const NOW: number = 10_000_000;
 const RUNAWAY: number = 50;
@@ -359,6 +360,68 @@ describe("QA controller revision drift", (): void => {
         },
       ),
     ).rejects.toThrow();
+  });
+  test("failing source sync waits then recovers", async (): Promise<void> => {
+    const root: string = await mkdtemp(join(tmpdir(), "quaz-follow-"));
+    const git = (...args: string[]): string =>
+      Bun.spawnSync(
+        [
+          "git",
+          "-c",
+          "user.name=QA",
+          "-c",
+          "user.email=qa@example.test",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        { cwd: root },
+      )
+        .stdout.toString()
+        .trim();
+    git("init", "-q");
+    await writeFile(join(root, "app.ts"), "export const app = true;");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    const deployed: string = git("rev-parse", "HEAD");
+    const events: Record<string, unknown>[] = [];
+    let probes: number = 0;
+    const project: Project.Project = {
+      ...PROJECT,
+      root,
+      revision: "git",
+      fetch: true,
+      deployment: { url: "https://app.test/version", repository: "acme/app" },
+    };
+    try {
+      const revision: string = await Controller.follow(
+        project,
+        30,
+        new AbortController().signal,
+        {
+          wait: async (): Promise<void> => {},
+          log: (event: Record<string, unknown>): void => {
+            events.push(event);
+          },
+        },
+        async (): Promise<Response> => {
+          if (++probes <= 2) throw new Error("Probe unreachable");
+
+          return new Response("{}", {
+            headers: { "x-quaz-revision": deployed },
+          });
+        },
+      )();
+      expect(revision).toBe(deployed);
+      expect(events.map((event): unknown => event.event)).toEqual([
+        "revision-wait",
+        "revision-wait",
+        "revision-ready",
+      ]);
+      expect(String(events[0].error)).toContain("Probe unreachable");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
   test("deployed revision change keeps the loop running", async (): Promise<void> => {
     const events: Record<string, unknown>[] = [];
