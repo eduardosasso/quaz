@@ -140,6 +140,9 @@ const command = async (args: string[], cwd: string): Promise<string> => {
     throw new Error(`${args.slice(0, 2).join(" ")} failed: ${errors.trim()}`);
   return output.trim();
 };
+export class Drift extends Error {
+  override name: string = "Drift";
+}
 export const revision = async (
   project: Project.Project,
   request: (
@@ -148,7 +151,13 @@ export const revision = async (
   ) => Promise<Response> = fetch,
 ): Promise<string> => {
   if (project.revision === "target")
-    return Project.checkTarget(project, request);
+    return Project.checkTarget(project, request).catch(
+      (error: unknown): never => {
+        throw error instanceof Project.TargetMismatch
+          ? new Drift(error.message)
+          : error;
+      },
+    );
   if (project.revision === "source") return source(project);
   if (
     await command(
@@ -165,7 +174,7 @@ export const revision = async (
     project.deployment &&
     (await Project.deployed(project, request)) !== current
   )
-    throw new Error("Project checkout does not match the deployed revision");
+    throw new Drift("Project checkout does not match the deployed revision");
 
   return current;
 };
@@ -174,7 +183,7 @@ export const checkRevision = async (
   expected: string,
 ): Promise<void> => {
   if ((await revision(project)) !== expected)
-    throw new Error("Project revision changed; restart the QA controller");
+    throw new Drift("Project revision changed during the QA run");
 };
 export const projectImage = (
   project: Project.Project,
@@ -467,7 +476,7 @@ export const run = async (
     const fingerprint: string = source(project);
     const selectedRevision: string = await revision(project);
     if (input.expectedRevision && selectedRevision !== input.expectedRevision)
-      throw new Error("Project revision changed; restart the QA controller");
+      throw new Drift("Project revision changed during the QA run");
     const base: string = input.runtime?.image ?? (await Image.base());
     const temporary: string =
       input.runtime?.directory ?? input.output ?? join(ROOT, "artifacts/qa");

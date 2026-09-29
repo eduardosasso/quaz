@@ -185,6 +185,9 @@ export const deployed = async (
   return parsed.success ? parsed.data : null;
 };
 
+export class TargetMismatch extends Error {
+  override name: string = "TargetMismatch";
+}
 export const checkTarget = async (
   project: Project,
   request: (
@@ -195,7 +198,9 @@ export const checkTarget = async (
   if (project.revision !== "target" || !project.deployment?.revision)
     throw new Error("Project has no deployed target revision");
   if ((await deployed(project, request)) !== project.deployment.revision)
-    throw new Error("Target deployment revision does not match project config");
+    throw new TargetMismatch(
+      "Target deployment revision does not match project config",
+    );
 
   return project.deployment.revision;
 };

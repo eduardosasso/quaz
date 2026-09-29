@@ -3,7 +3,9 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Backoff from "@qa/backoff";
 import type * as Client from "@qa/client";
+import CONFIG from "@qa/config.json";
 import * as Controller from "@qa/controller";
 import * as Docker from "@qa/docker";
 import * as Lifecycle from "@qa/lifecycle";
@@ -28,6 +30,7 @@ const PROJECT: Project.Project = {
   revision: "source",
 };
 const NOW: number = 10_000_000;
+const RUNAWAY: number = 50;
 const run = (
   time: number,
   changes: Partial<Protocol.Run> = {},
@@ -191,6 +194,7 @@ describe("QA controller execution", (): void => {
       REVISION,
       new AbortController().signal,
       {
+        revision: async (): Promise<string> => REVISION,
         state: async (): Promise<Protocol.State> => state(),
         recover: async (): Promise<void> => {},
         now: (): number => NOW,
@@ -222,6 +226,7 @@ describe("QA controller execution", (): void => {
         REVISION,
         new AbortController().signal,
         {
+          revision: async (): Promise<string> => REVISION,
           state: async (): Promise<Protocol.State> => state(),
           recover: async (): Promise<void> => {},
           now: (): number => now,
@@ -252,6 +257,7 @@ describe("QA controller execution", (): void => {
         REVISION,
         new AbortController().signal,
         {
+          revision: async (): Promise<string> => REVISION,
           state: async (): Promise<Protocol.State> => {
             polls++;
             throw new Error("Offline");
@@ -278,6 +284,7 @@ describe("QA controller execution", (): void => {
       REVISION,
       stop.signal,
       {
+        revision: async (): Promise<string> => REVISION,
         state: async (): Promise<Protocol.State> => state(),
         recover: async (): Promise<void> => {},
         now: (): number => NOW,
@@ -293,6 +300,361 @@ describe("QA controller execution", (): void => {
       },
     );
     expect(finished).toBe(2);
+  });
+});
+
+describe("QA controller revision drift", (): void => {
+  const MISMATCH: string =
+    "Project checkout does not match the deployed revision";
+  const NEXT: string = "b".repeat(40);
+  test("checkout mismatch waits with backoff instead of exiting", async (): Promise<void> => {
+    const events: Record<string, unknown>[] = [];
+    const delays: number[] = [];
+    let calls: number = 0;
+    const revision: string = await Controller.settle(
+      async (): Promise<string> => {
+        calls++;
+        if (calls <= 3) throw new Error(MISMATCH);
+
+        return NEXT;
+      },
+      30,
+      new AbortController().signal,
+      {
+        wait: async (milliseconds: number): Promise<void> => {
+          delays.push(milliseconds);
+          if (delays.length > RUNAWAY) throw new Error("Runaway wait");
+        },
+        log: (event: Record<string, unknown>): void => {
+          events.push(event);
+        },
+      },
+    );
+    expect(revision).toBe(NEXT);
+    expect(delays).toEqual([30_000, 60_000, 120_000]);
+    expect(events.map((event): unknown => event.event)).toEqual([
+      "revision-wait",
+      "revision-wait",
+      "revision-wait",
+      "revision-ready",
+    ]);
+    expect(events[0].error).toContain(MISMATCH);
+  });
+  test("revision wait stops on shutdown", async (): Promise<void> => {
+    const stop = new AbortController();
+    let calls: number = 0;
+    await expect(
+      Controller.settle(
+        async (): Promise<string> => {
+          if (++calls > RUNAWAY) throw new Controller.Halt("Runaway resolve");
+          throw new Error(MISMATCH);
+        },
+        30,
+        stop.signal,
+        {
+          wait: async (): Promise<void> => {
+            stop.abort();
+          },
+          log: (): void => {},
+        },
+      ),
+    ).rejects.toThrow();
+  });
+  test("deployed revision change keeps the loop running", async (): Promise<void> => {
+    const events: Record<string, unknown>[] = [];
+    const executed: string[] = [];
+    const polled: string[] = [];
+    let calls: number = 0;
+    await Controller.loop(
+      settings({ parallel: 1, runs: 2 }),
+      PROJECT,
+      REVISION,
+      new AbortController().signal,
+      {
+        revision: async (): Promise<string> =>
+          Controller.settle(
+            async (): Promise<string> => {
+              calls++;
+              if (calls === 1) return REVISION;
+              if (calls <= 5) throw new Error(MISMATCH);
+
+              return NEXT;
+            },
+            1,
+            new AbortController().signal,
+            {
+              wait: async (): Promise<void> => {},
+              log: (event: Record<string, unknown>): void => {
+                events.push(event);
+              },
+            },
+          ),
+        state: async (revision: string): Promise<Protocol.State> => {
+          polled.push(revision);
+
+          return state();
+        },
+        recover: async (): Promise<void> => {},
+        now: (): number => NOW,
+        wait: async (): Promise<void> => {
+          await Bun.sleep(1);
+        },
+        log: (event: Record<string, unknown>): void => {
+          events.push(event);
+        },
+        execute: async (
+          _job: Controller.Job,
+          revision: string,
+        ): Promise<void> => {
+          executed.push(revision);
+          await Bun.sleep(5);
+        },
+      },
+    );
+    expect(executed).toEqual([REVISION, NEXT]);
+    expect(polled).toContain(NEXT);
+    const names: unknown[] = events.map((event): unknown => event.event);
+    expect(names).toContain("revision-wait");
+    expect(names).toContain("revision-change");
+    expect(names).not.toContain("controller-error");
+  });
+});
+
+describe("QA controller supervision", (): void => {
+  const pacing = (
+    delays: number[],
+    events: Record<string, unknown>[],
+    now: () => number = (): number => NOW,
+  ): Backoff.Pacing => ({
+    now,
+    wait: async (milliseconds: number): Promise<void> => {
+      delays.push(milliseconds);
+      if (delays.length > RUNAWAY) throw new Error("Runaway wait");
+    },
+    log: (event: Record<string, unknown>): void => {
+      events.push(event);
+    },
+  });
+  test("failures restart in process with capped backoff", async (): Promise<void> => {
+    const delays: number[] = [];
+    const events: Record<string, unknown>[] = [];
+    let calls: number = 0;
+    await Controller.supervise(
+      async (): Promise<void> => {
+        calls++;
+        if (calls <= 9) throw new Error("Tracker offline");
+      },
+      60,
+      new AbortController().signal,
+      pacing(delays, events),
+    );
+    expect(calls).toBe(10);
+    expect(delays.slice(0, 3)).toEqual([60_000, 120_000, 240_000]);
+    expect(Math.max(...delays)).toBe(
+      CONFIG.controller.maxBackoffSeconds * Backoff.MILLISECONDS,
+    );
+    expect(
+      events.every((event): boolean => event.event === "controller-restart"),
+    ).toBe(true);
+    expect(events[0].error).toContain("Tracker offline");
+  });
+  test("halt stops without a restart", async (): Promise<void> => {
+    const delays: number[] = [];
+    const events: Record<string, unknown>[] = [];
+    let calls: number = 0;
+    await expect(
+      Controller.supervise(
+        async (): Promise<void> => {
+          calls++;
+          throw new Controller.Halt("Worker retry limit reached");
+        },
+        60,
+        new AbortController().signal,
+        pacing(delays, events),
+      ),
+    ).rejects.toThrow("Worker retry limit reached");
+    expect(calls).toBe(1);
+    expect(delays).toEqual([]);
+  });
+  test("a long healthy run resets the restart backoff", async (): Promise<void> => {
+    const delays: number[] = [];
+    let now: number = NOW;
+    let calls: number = 0;
+    await Controller.supervise(
+      async (): Promise<void> => {
+        calls++;
+        now += CONFIG.controller.maxBackoffSeconds * Backoff.MILLISECONDS;
+        if (calls <= 3) throw new Error("Tracker offline");
+      },
+      60,
+      new AbortController().signal,
+      pacing(delays, [], (): number => now),
+    );
+    expect(delays).toEqual([60_000, 60_000, 60_000]);
+  });
+  test("shutdown during a restart wait is not fatal", async (): Promise<void> => {
+    const stop = new AbortController();
+    let calls: number = 0;
+    await Controller.supervise(
+      async (): Promise<void> =>
+        Controller.settle(
+          async (): Promise<string> => {
+            calls++;
+            throw new Error("Project checkout does not match");
+          },
+          30,
+          stop.signal,
+          {
+            wait: async (): Promise<void> => {
+              stop.abort();
+            },
+            log: (): void => {},
+          },
+        ).then((): void => {}),
+      60,
+      stop.signal,
+      pacing([], []),
+    );
+    expect(calls).toBe(1);
+  });
+  test("missing tracker token halts", (): void => {
+    expect((): string => Controller.trackerToken({})).toThrow(Controller.Halt);
+  });
+  test("bounded runs with failures halt", async (): Promise<void> => {
+    await expect(
+      Controller.loop(
+        settings({ parallel: 1, runs: 1, attempts: 3 }),
+        PROJECT,
+        REVISION,
+        new AbortController().signal,
+        {
+          revision: async (): Promise<string> => REVISION,
+          state: async (): Promise<Protocol.State> => state(),
+          recover: async (): Promise<void> => {},
+          now: (): number => NOW,
+          wait: async (): Promise<void> => {
+            await Bun.sleep(1);
+          },
+          log: (): void => {},
+          execute: async (): Promise<void> => {
+            throw new Error("Cannot start");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(Controller.Halt);
+  });
+  test("runs stopped by a revision change do not reach the retry limit", async (): Promise<void> => {
+    const stop = new AbortController();
+    const events: Record<string, unknown>[] = [];
+    let calls: number = 0;
+    let clock: number = NOW;
+    await Controller.loop(
+      settings({ parallel: 1, attempts: 2, retrySeconds: 1 }),
+      PROJECT,
+      REVISION,
+      stop.signal,
+      {
+        revision: async (): Promise<string> => REVISION,
+        state: async (): Promise<Protocol.State> => state(),
+        recover: async (): Promise<void> => {},
+        now: (): number => {
+          clock += 1_000_000;
+
+          return clock;
+        },
+        wait: async (): Promise<void> => {
+          await Bun.sleep(1);
+        },
+        log: (event: Record<string, unknown>): void => {
+          events.push(event);
+        },
+        execute: async (): Promise<void> => {
+          calls++;
+          if (calls >= 5) stop.abort();
+          throw new Runner.Drift("Project revision changed during the QA run");
+        },
+      },
+    );
+    const names: unknown[] = events.map((event): unknown => event.event);
+    expect(calls).toBe(5);
+    expect(names.filter((name): boolean => name === "run-stale")).toHaveLength(
+      5,
+    );
+    expect(names).not.toContain("run-error");
+  });
+  test("bounded runs stopped by a revision change do not halt", async (): Promise<void> => {
+    await expect(
+      Controller.loop(
+        settings({ parallel: 1, runs: 1, attempts: 3 }),
+        PROJECT,
+        REVISION,
+        new AbortController().signal,
+        {
+          revision: async (): Promise<string> => REVISION,
+          state: async (): Promise<Protocol.State> => state(),
+          recover: async (): Promise<void> => {},
+          now: (): number => NOW,
+          wait: async (): Promise<void> => {
+            await Bun.sleep(1);
+          },
+          log: (): void => {},
+          execute: async (): Promise<void> => {
+            throw new Runner.Drift(
+              "Project revision changed during the QA run",
+            );
+          },
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+  test("a stale run waits before relaunching", async (): Promise<void> => {
+    const stop = new AbortController();
+    let calls: number = 0;
+    setTimeout((): void => stop.abort(), 50);
+    await Controller.loop(
+      settings({ parallel: 1, retrySeconds: 60 }),
+      PROJECT,
+      REVISION,
+      stop.signal,
+      {
+        revision: async (): Promise<string> => REVISION,
+        state: async (): Promise<Protocol.State> => state(),
+        recover: async (): Promise<void> => {},
+        now: (): number => NOW,
+        wait: async (): Promise<void> => {
+          await Bun.sleep(1);
+        },
+        log: (): void => {},
+        execute: async (): Promise<void> => {
+          calls++;
+          throw new Runner.Drift("Project revision changed during the QA run");
+        },
+      },
+    );
+    expect(calls).toBe(1);
+  });
+  test("worker retry limit halts the controller", async (): Promise<void> => {
+    await expect(
+      Controller.loop(
+        settings({ parallel: 1, attempts: 1 }),
+        PROJECT,
+        REVISION,
+        new AbortController().signal,
+        {
+          revision: async (): Promise<string> => REVISION,
+          state: async (): Promise<Protocol.State> => state(),
+          recover: async (): Promise<void> => {},
+          now: (): number => NOW,
+          wait: async (): Promise<void> => {
+            await Bun.sleep(1);
+          },
+          log: (): void => {},
+          execute: async (): Promise<void> => {
+            throw new Error("Cannot start");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(Controller.Halt);
   });
 });
 

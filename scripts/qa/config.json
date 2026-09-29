@@ -19,6 +19,9 @@
     "intervalSeconds": 300,
     "retrySeconds": 30,
     "attempts": 3,
+    "backoffSeconds": 60,
+    "maxBackoffSeconds": 3600,
+    "restartLimit": 5,
     "directory": "/qa",
     "skill": "/opt/impeccable",
     "label": "app.qa.controller"
