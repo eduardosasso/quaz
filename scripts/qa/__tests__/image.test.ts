@@ -487,6 +487,12 @@ test("remote target uses the deployed revision with one Quaz image", async () =>
       request,
     ),
   ).rejects.toThrow("does not match");
+  await expect(
+    Runner.revision(
+      { ...project, deployment: { url, revision: "e".repeat(64) } },
+      request,
+    ),
+  ).rejects.toBeInstanceOf(Runner.Drift);
 });
 
 test("remote target accepts a generic JSON version endpoint", async () => {

@@ -151,7 +151,13 @@ export const revision = async (
   ) => Promise<Response> = fetch,
 ): Promise<string> => {
   if (project.revision === "target")
-    return Project.checkTarget(project, request);
+    return Project.checkTarget(project, request).catch(
+      (error: unknown): never => {
+        throw error instanceof Project.TargetMismatch
+          ? new Drift(error.message)
+          : error;
+      },
+    );
   if (project.revision === "source") return source(project);
   if (
     await command(
