@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Controller from "@qa/controller";
 import * as Image from "@qa/image";
 import * as Project from "@qa/project";
 import * as Runner from "@qa/run";
@@ -376,7 +377,10 @@ test("controller reads the current project source revision", async () => {
   writeFileSync(join(folder, "app.ts"), "second");
   expect(await Runner.revision(project)).not.toBe(built);
   await expect(Runner.checkRevision(project, built)).rejects.toThrow(
-    "restart the QA controller",
+    "revision changed during the QA run",
+  );
+  await expect(Runner.checkRevision(project, built)).rejects.toBeInstanceOf(
+    Runner.Drift,
   );
   const changed: string = await Runner.revision(project);
   writeFileSync(dockerfile, "FROM second");
@@ -430,6 +434,29 @@ test("deployed Git revision must match the target checkout", async () => {
   await expect(Runner.revision(project, old)).rejects.toThrow(
     "does not match the deployed revision",
   );
+  await expect(Runner.revision(project, old)).rejects.toBeInstanceOf(
+    Runner.Drift,
+  );
+  let probes: number = 0;
+  const events: unknown[] = [];
+  const deploying = async (): Promise<Response> =>
+    ++probes <= 2 ? old() : current();
+  const latest = Controller.follow(
+    project,
+    1,
+    new AbortController().signal,
+    {
+      wait: async (): Promise<void> => {
+        if (probes > 10) throw new Error("Runaway wait");
+      },
+      log: (event: Record<string, unknown>): void => {
+        events.push(event.event);
+      },
+    },
+    deploying,
+  );
+  expect(await latest()).toBe(commit);
+  expect(events).toEqual(["revision-wait", "revision-wait", "revision-ready"]);
 });
 
 test("remote target uses the deployed revision with one Quaz image", async () => {

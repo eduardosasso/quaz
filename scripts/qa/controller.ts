@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import * as Backoff from "@qa/backoff";
 import * as Client from "@qa/client";
 import CONFIG from "@qa/config.json";
 import * as Docker from "@qa/docker";
@@ -18,7 +19,6 @@ import { z } from "zod";
 import * as Storage from "@/local_storage_native";
 import * as Protocol from "@/qa_protocol";
 
-const MILLISECONDS: number = 1000;
 const duration = z.number().int().positive();
 export const schema = z
   .object({
@@ -59,10 +59,13 @@ export const schema = z
 export type Settings = z.infer<typeof schema>;
 export type Job = { mode: Protocol.Mode; scenario: string; ticket?: number };
 export type Active = { job: Job; promise: Promise<void> };
+export class Halt extends Error {
+  override name: string = "Halt";
+}
 export const trackerToken = (env: NodeJS.ProcessEnv): string => {
   const token: string = env.QUAZ_TRACKER_TOKEN ?? "";
   if (!token)
-    throw new Error(
+    throw new Halt(
       "Missing QUAZ_TRACKER_TOKEN; provide it at runtime or through QUAZ_ENVIRONMENT",
     );
 
@@ -75,7 +78,7 @@ export const timestamp = (run: Protocol.Run): number => {
 
   return Number.isFinite(value)
     ? value
-    : run.expires - Protocol.LEASE_SECONDS * MILLISECONDS;
+    : run.expires - Protocol.LEASE_SECONDS * Backoff.MILLISECONDS;
 };
 export const available = (
   history: Protocol.Run[],
@@ -92,7 +95,7 @@ export const available = (
     ? settings.retrySeconds
     : settings.intervalSeconds;
 
-  return now >= timestamp(history[0]) + wait * MILLISECONDS;
+  return now >= timestamp(history[0]) + wait * Backoff.MILLISECONDS;
 };
 export const plans = (
   settings: Settings,
@@ -194,36 +197,92 @@ export const recovery = async (
   if (errors.length)
     throw new Error(`QA recovery needs attention: ${errors.join("; ")}`);
 };
-const wait = async (
-  milliseconds: number,
-  signal: AbortSignal,
-): Promise<void> => {
-  if (signal.aborted) return;
-  await new Promise<void>((finish): void => {
-    const done = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      finish();
-    };
-    const timer = setTimeout(done, milliseconds);
-    signal.addEventListener("abort", done, { once: true });
-  });
-};
-export type Dependencies = {
-  state: () => Promise<Protocol.State>;
-  execute: (job: Job, signal: AbortSignal) => Promise<void>;
+export type Dependencies = Backoff.Pacing & {
+  revision: () => Promise<string>;
+  state: (revision: string) => Promise<Protocol.State>;
+  execute: (job: Job, revision: string, signal: AbortSignal) => Promise<void>;
   recover: () => Promise<void>;
-  now: () => number;
-  wait: (milliseconds: number, signal: AbortSignal) => Promise<void>;
-  log: (event: Record<string, unknown>) => void;
+};
+export const settle = async (
+  resolve: () => Promise<string>,
+  seconds: number,
+  signal: AbortSignal,
+  dependencies: Pick<Dependencies, "wait" | "log">,
+): Promise<string> => {
+  for (let attempt: number = 1; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      const revision: string = await resolve();
+      if (attempt > 1)
+        dependencies.log({ event: "revision-ready", revision, attempt });
+
+      return revision;
+    } catch (error: unknown) {
+      const delay: number = Backoff.delay(attempt, seconds);
+      dependencies.log({
+        event: "revision-wait",
+        attempt,
+        delaySeconds: delay / Backoff.MILLISECONDS,
+        error: String(error),
+      });
+      await dependencies.wait(delay, signal);
+    }
+  }
+};
+export const follow =
+  (
+    project: Project.Project,
+    seconds: number,
+    signal: AbortSignal,
+    dependencies: Pick<Dependencies, "wait" | "log">,
+    request?: Parameters<typeof Runner.revision>[1],
+  ): (() => Promise<string>) =>
+  (): Promise<string> =>
+    settle(
+      (): Promise<string> => Runner.revision(project, request),
+      seconds,
+      signal,
+      dependencies,
+    );
+export const supervise = async (
+  run: () => Promise<void>,
+  seconds: number,
+  signal: AbortSignal,
+  dependencies: Backoff.Pacing,
+): Promise<void> => {
+  let attempt: number = 0;
+  while (!signal.aborted) {
+    const started: number = dependencies.now();
+    try {
+      await run();
+
+      return;
+    } catch (error: unknown) {
+      if (error instanceof Halt) throw error;
+      if (signal.aborted) return;
+      const healthy: boolean =
+        dependencies.now() - started >=
+        CONFIG.controller.maxBackoffSeconds * Backoff.MILLISECONDS;
+      attempt = healthy ? 1 : attempt + 1;
+      const delay: number = Backoff.delay(attempt, seconds);
+      dependencies.log({
+        event: "controller-restart",
+        attempt,
+        delaySeconds: delay / Backoff.MILLISECONDS,
+        error: String(error),
+      });
+      await dependencies.wait(delay, signal);
+    }
+  }
 };
 export const loop = async (
   settings: Settings,
   project: Project.Project,
-  revision: string,
+  initial: string,
   signal: AbortSignal,
   dependencies: Dependencies,
 ): Promise<void> => {
+  let revision: string = initial;
   const active: Set<Active> = new Set();
   let launched: number = 0;
   let errors: number = 0;
@@ -234,12 +293,21 @@ export const loop = async (
     while (!signal.aborted) {
       if (settings.runs && launched >= settings.runs && !active.size) break;
       if (consecutiveFailures >= settings.attempts && !active.size)
-        throw new Error(
+        throw new Halt(
           "Worker retry limit reached; inspect the tracking board and controller logs",
         );
       try {
         if (!active.size) await dependencies.recover();
-        const state: Protocol.State = await dependencies.state();
+        const current: string = await dependencies.revision();
+        if (current !== revision) {
+          dependencies.log({
+            event: "revision-change",
+            from: revision,
+            to: current,
+          });
+          revision = current;
+        }
+        const state: Protocol.State = await dependencies.state(revision);
         signal.throwIfAborted();
         const remaining: number = settings.runs
           ? settings.runs - launched
@@ -256,6 +324,7 @@ export const loop = async (
                 dependencies.now(),
               ).slice(0, remaining);
         for (const job of jobs) {
+          const selected: string = revision;
           launched++;
           const item: Active = { job, promise: Promise.resolve() };
           active.add(item);
@@ -267,14 +336,24 @@ export const loop = async (
           });
           item.promise = Promise.resolve()
             .then(async (): Promise<void> => {
-              await dependencies.execute(job, signal);
+              await dependencies.execute(job, selected, signal);
               consecutiveFailures = 0;
             })
             .catch((error: unknown): void => {
               failedRuns++;
-              consecutiveFailures++;
               retryAfter =
-                dependencies.now() + settings.retrySeconds * MILLISECONDS;
+                dependencies.now() +
+                settings.retrySeconds * Backoff.MILLISECONDS;
+              if (error instanceof Runner.Drift) {
+                dependencies.log({
+                  event: "run-stale",
+                  ...job,
+                  revision: selected,
+                  error: String(error),
+                });
+                return;
+              }
+              consecutiveFailures++;
               dependencies.log({
                 event: "run-error",
                 ...job,
@@ -293,7 +372,7 @@ export const loop = async (
         try {
           await Promise.race([
             dependencies.wait(
-              settings.pollSeconds * MILLISECONDS,
+              settings.pollSeconds * Backoff.MILLISECONDS,
               paused.signal,
             ),
             ...[...active].map((item): Promise<void> => item.promise),
@@ -311,14 +390,17 @@ export const loop = async (
           error: String(error),
         });
         if (errors >= settings.attempts) throw error;
-        await dependencies.wait(settings.retrySeconds * MILLISECONDS, signal);
+        await dependencies.wait(
+          settings.retrySeconds * Backoff.MILLISECONDS,
+          signal,
+        );
       }
     }
   } finally {
     await Promise.all([...active].map((item): Promise<void> => item.promise));
   }
   if (failedRuns && settings.runs)
-    throw new Error(
+    throw new Halt(
       `${failedRuns} QA runs fail; inspect the tracking board reports`,
     );
 };
@@ -383,16 +465,20 @@ export const start = async (
     });
     const path: string = join(runtime.directory, "destination.json");
     if (existsSync(path) && (await readFile(path, "utf8")) !== destination)
-      throw new Error(
+      throw new Halt(
         "Use a separate runtime volume for another tracking board or project",
       );
     await writeFile(path, destination, { mode: 0o600 });
     await Docker.cleanup(runtime);
     await Docker.network(runtime);
     connected = true;
-    const revision: string = await Runner.revision(project);
     const log = (event: Record<string, unknown>): void =>
       console.log(JSON.stringify(event));
+    const latest = follow(project, settings.pollSeconds, signal, {
+      wait: Backoff.wait,
+      log,
+    });
+    const initial: string = await latest();
     log({
       event: "ready",
       project: project.id,
@@ -400,9 +486,9 @@ export const start = async (
       parallel: settings.parallel,
       mode: settings.mode,
     });
-    await loop(settings, project, revision, signal, {
-      state: async (): Promise<Protocol.State> => {
-        await Runner.checkRevision(project, revision);
+    await loop(settings, project, initial, signal, {
+      revision: latest,
+      state: async (revision: string): Promise<Protocol.State> => {
         const state: Protocol.State = await client.request(
           `/state?project=${encodeURIComponent(project.id)}&revision=${revision}`,
         );
@@ -411,7 +497,11 @@ export const start = async (
 
         return state;
       },
-      execute: async (job: Job, stopping: AbortSignal): Promise<void> => {
+      execute: async (
+        job: Job,
+        revision: string,
+        stopping: AbortSignal,
+      ): Promise<void> => {
         await Runner.run(
           {
             ...input,
@@ -426,7 +516,7 @@ export const start = async (
       },
       recover: async (): Promise<void> => recovery(client, runtime.directory),
       now: Date.now,
-      wait,
+      wait: Backoff.wait,
       log,
     });
   } finally {
@@ -442,19 +532,33 @@ export const start = async (
   }
 };
 if (import.meta.main) {
-  const { values } = parseArgs({
-    options: { config: { type: "string", default: "/config/controller.json" } },
-  });
-  const settings: Settings = schema.parse(
-    JSON.parse(await readFile(resolve(values.config), "utf8")),
-  );
   const stopping = new AbortController();
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.once(signal, (): void => stopping.abort());
   try {
-    await start(settings, stopping.signal);
+    const { values } = parseArgs({
+      options: {
+        config: { type: "string", default: "/config/controller.json" },
+      },
+    });
+    const settings: Settings = schema.parse(
+      JSON.parse(await readFile(resolve(values.config), "utf8")),
+    );
+    await supervise(
+      (): Promise<void> => start(settings, stopping.signal),
+      settings.retrySeconds,
+      stopping.signal,
+      {
+        now: Date.now,
+        wait: Backoff.wait,
+        log: (event: Record<string, unknown>): void =>
+          console.log(JSON.stringify(event)),
+      },
+    );
   } catch (error: unknown) {
-    console.error(String(error));
+    console.error(
+      JSON.stringify({ event: "controller-fatal", error: String(error) }),
+    );
     process.exitCode = 1;
   }
 }
