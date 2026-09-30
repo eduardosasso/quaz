@@ -5,7 +5,9 @@ import {
   existsSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -280,6 +282,34 @@ test("second process cannot open a locked state database", async () => {
   await first.close?.();
   const again: Client.Client = await connect(shared.tracker);
   await again.close?.();
+});
+
+test("artifact upload stays local and private beside the database", async () => {
+  const shared = fixture();
+  configure("state.db", "empty");
+  const client: Client.Client = await connect(shared.tracker);
+  const run: Protocol.Run = await client.request("/runs", "POST", BEGIN);
+  const bytes: Uint8Array = new TextEncoder().encode("screenshot");
+  const id: number = await client.upload(
+    run.id,
+    "validator/screen.png",
+    bytes,
+    "image/png",
+  );
+  const file: string = join(folder, "runs", run.id, "validator/screen.png");
+
+  expect(id).toBe(1);
+  expect(
+    await client.upload(run.id, "validator/screen.png", bytes, "image/png"),
+  ).toBe(id);
+  await expect(
+    client.upload(run.id, "../escape.png", bytes, "image/png"),
+  ).rejects.toThrow("Invalid QA artifact path");
+  expect(readFileSync(file)).toEqual(Buffer.from(bytes));
+  expect(statSync(file).mode & 0o777).toBe(0o600);
+  expect(shared.writes()).toBe(0);
+  await client.close?.();
+  rmSync(join(folder, "runs"), { recursive: true });
 });
 
 test("state survives close and reopen without the tracker document", async () => {
