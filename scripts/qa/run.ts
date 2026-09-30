@@ -667,7 +667,7 @@ export const run = async (
             isolated: true,
             run: began,
             error: INTERRUPTION,
-            interrupted: true,
+            interrupted: false,
           }),
         );
         attempts.push(directory);
@@ -706,7 +706,7 @@ export const run = async (
                 isolated: true,
                 run: began,
                 error: INTERRUPTION,
-                interrupted: true,
+                interrupted: false,
               }),
             );
             let selection: Lifecycle.Plan = {

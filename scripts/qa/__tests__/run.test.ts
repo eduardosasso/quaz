@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type * as Client from "@qa/client";
 import * as Image from "@qa/image";
 import * as Runner from "@qa/run";
+import type * as Protocol from "@/qa_protocol";
 
 const client: Client.Client = {
   comments: async (): Promise<string[]> => [],
@@ -288,6 +289,62 @@ describe("build-time source drift", (): void => {
     } finally {
       base.mockRestore();
       executable.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("crash recovery placeholder", (): void => {
+  test("uncorrected pre-run placeholder resolves as failed, not interrupted", async (): Promise<void> => {
+    const directory: string = await mkdtemp(
+      join(tmpdir(), "quaz-run-recover-"),
+    );
+    await mkdir(join(directory, "output"), { recursive: true });
+    const began: Protocol.Begin = {
+      id: "sample-1",
+      project: "sample-app",
+      mode: "smoke",
+      revision: "a".repeat(40),
+      runner: { source: "a".repeat(40), image: `sha256:${"b".repeat(64)}` },
+      scenario: "empty",
+    };
+    const run: Protocol.Run = {
+      ...began,
+      note_id: 1,
+      board_id: 1,
+      owner: "qa",
+      status: "open",
+      expires: Date.now() + 1_000_000,
+      target: null,
+      snapshot: null,
+      receipt: null,
+    };
+    await writeFile(
+      join(directory, "recovery.json"),
+      JSON.stringify({
+        isolated: true,
+        run: began,
+        error: "QA run interrupted before completion",
+        interrupted: false,
+      }),
+    );
+    const recoverClient: Client.Client = {
+      comments: async (): Promise<string[]> => [],
+      upload: async (): Promise<number> => 1,
+      request: async <T>(path: string): Promise<T> => {
+        if (path === "/runs") return run as T;
+        if (path === `/runs/${began.id}/finish`)
+          return { run: { ...run, status: "failed" } } as T;
+        throw new Error(`Unexpected client request ${path}`);
+      },
+    };
+    try {
+      const conclusion: Protocol.Finish = await Runner.recover(
+        recoverClient,
+        directory,
+      );
+      expect(conclusion.status).toBe("failed");
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });
