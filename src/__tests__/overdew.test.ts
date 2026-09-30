@@ -271,9 +271,6 @@ test("card metadata updates after creation", async () => {
     if (method === "GET" && url.endsWith("/notes/8"))
       return Response.json(card);
     if (method === "PUT" && url.endsWith("/notes/8")) {
-      expect(new Headers(init?.headers).get("X-Board-Document-Lease")).toBe(
-        JSON.stringify({ key: "quaz-sample", owner: "owner", fence: 1 }),
-      );
       if (!(init?.body instanceof FormData))
         throw new Error("Card update needs form data");
       card.description = String(init.body.get("description"));
@@ -289,7 +286,6 @@ test("card metadata updates after creation", async () => {
     "owner/board",
     "token",
   );
-  tracker.bind?.("quaz-sample", "owner", 1);
   const created = await tracker.create("QA discover: sample", "test-key");
   const updated = await tracker.update(created.id, {
     title: "QA discover: sample",
@@ -521,4 +517,41 @@ test("listing can request every status", async () => {
   await tracker.list(["completed"]);
 
   expect(requested).toEqual(["active,completed,archived", "completed"]);
+});
+
+test("remover deletes cards and attachments and treats 404 as gone", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const path: string = new URL(String(input)).pathname;
+    calls.push(`${init?.method} ${path}`);
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer token",
+    );
+    if (path.endsWith("/9")) return new Response("Missing", { status: 404 });
+    if (path.endsWith("/7")) return new Response("Broken", { status: 500 });
+
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  const remove = Overdew.remover(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+
+  expect(await remove.note(5)).toBe(true);
+  expect(await remove.attachment(6)).toBe(true);
+  expect(await remove.note(9)).toBe(false);
+  await expect(remove.attachment(7)).rejects.toThrow("returned 500");
+  expect(calls).toEqual([
+    "DELETE /api/notes/5",
+    "DELETE /api/attachments/6",
+    "DELETE /api/notes/9",
+    "DELETE /api/attachments/7",
+  ]);
+  expect(() =>
+    Overdew.remover("http://tracker.test", "owner/board", "token"),
+  ).toThrow("requires HTTPS");
 });

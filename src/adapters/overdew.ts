@@ -122,11 +122,7 @@ const json = async (response: Response): Promise<unknown> =>
 const bytes = async (response: Response): Promise<ArrayBuffer> =>
   read(response, (value): Promise<ArrayBuffer> => value.arrayBuffer());
 
-export const connect = (
-  origin: string,
-  board: string,
-  token: string,
-): Tracker.Authority => {
+const validated = (origin: string, board: string, token: string): string => {
   const url: URL = new URL(origin);
   if (!token || !/^[\w-]+\/[\w-]+$/.test(board) || url.username || url.password)
     throw new Error("A board and API token are required");
@@ -135,8 +131,51 @@ export const connect = (
     !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
   )
     throw new Error("Remote card API requires HTTPS");
-  const endpoint: string = url.origin;
-  let leaseHeader: string | undefined;
+
+  return url.origin;
+};
+
+export type Remover = {
+  note: (id: number) => Promise<boolean>;
+  attachment: (id: number) => Promise<boolean>;
+};
+
+export const remover = (
+  origin: string,
+  board: string,
+  token: string,
+): Remover => {
+  const endpoint: string = validated(origin, board, token);
+  const remove = async (path: string): Promise<boolean> => {
+    const response: Response = await send(
+      `Card API DELETE ${path}`,
+      `${endpoint}/api${path}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      },
+    );
+    if (response.status === 404) return false;
+    if (!response.ok)
+      throw new Error(`Card API DELETE ${path} returned ${response.status}`);
+
+    return true;
+  };
+
+  return {
+    note: (id: number): Promise<boolean> => remove(`/notes/${id}`),
+    attachment: (id: number): Promise<boolean> => remove(`/attachments/${id}`),
+  };
+};
+
+export const connect = (
+  origin: string,
+  board: string,
+  token: string,
+): Tracker.Authority => {
+  const endpoint: string = validated(origin, board, token);
   const request = async (
     path: string,
     method: string = "GET",
@@ -152,7 +191,6 @@ export const connect = (
         headers: {
           Authorization: `Bearer ${token}`,
           ...(key ? { "Idempotency-Key": key } : {}),
-          ...(leaseHeader ? { "X-Board-Document-Lease": leaseHeader } : {}),
         },
         redirect: "error",
         signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -276,9 +314,6 @@ export const connect = (
     },
   };
   const tracker: Tracker.Authority = {
-    bind: (key: string, owner: string, fence: number): void => {
-      leaseHeader = JSON.stringify({ key, owner, fence });
-    },
     list: async (
       statuses: readonly string[] = Tracker.ACTIVE,
     ): Promise<Tracker.Card[]> => {

@@ -77,5 +77,4 @@ export type Document = {
 
 export type Authority = Tracker & {
   document: Document;
-  bind?: (key: string, owner: string, fence: number) => void;
 };

@@ -32,15 +32,15 @@ const legacy = z
   .strict();
 export type Record = z.infer<typeof schema>;
 
+export const file = (name: string): boolean =>
+  name.startsWith(PREFIX) && name.endsWith(".json");
+
 export const load = async (
   tracker: Tracker.Tracker,
   card: number,
 ): Promise<Record | null> => {
   const files: Tracker.Attachment[] = (await tracker.attachments(card))
-    .filter(
-      (entry): boolean =>
-        entry.name.startsWith(PREFIX) && entry.name.endsWith(".json"),
-    )
+    .filter((entry): boolean => file(entry.name))
     .sort((left, right): number => right.id - left.id);
   if (!files.length) return null;
   const raw: Uint8Array = await tracker.download(files[0].id);

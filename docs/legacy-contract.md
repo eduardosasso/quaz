@@ -7,7 +7,7 @@ This is the contract before the Quaz extraction. Its Overdew commands and paths 
 # Disposable QA runs
 
 The QA runner tests one small mobile flow in a disposable Docker container.
-Overdew stores the run, screenshots, report, findings, claims, and verification history.
+Overdew stores issue cards and their evidence. `QUAZ_DB` stores runs, reports, claims, findings, and verification history.
 The tested project and the Overdew tracking board are separate inputs.
 Codex is the first provider. Provider invocation is isolated in `scripts/qa/provider.ts`.
 
@@ -26,7 +26,7 @@ Codex is the first provider. Provider invocation is isolated in `scripts/qa/prov
 - Discovery validation restarts the app with separate data and credentials seeded from the original scenario.
 - Reviewer writes never replace the validator's initial state. Both phases record their starting fixture metadata.
 - The publisher requires checked reports and screenshots returned inline to both reviewers.
-- Discovery reads manual and QA issues before selecting a flow. Run cards and other projects are excluded.
+- Discovery reads manual and QA issues before selecting a flow. Legacy run cards and other projects are excluded.
 - A separate model compares confirmed findings by meaning against the latest complete catalog and each other.
 - A board publication lease serializes final comparisons. Changed snapshots, expired leases, or uncertain matches hold publication.
 - Matching issues reuse their original cards and receive evidence comments. Human fields and existing acceptance tests remain intact.
@@ -60,9 +60,9 @@ Codex is the first provider. Provider invocation is isolated in `scripts/qa/prov
 Verification tests only saved acceptance criteria. Discovery runs the full six-guide review.
 `smoke` tests project infrastructure without model calls or defect creation.
 
-Run cards use `qa-run` and `project:<id>` tags. Issue cards use `qa` and `project:<id>`.
-Run cards carry reports and screenshots. Issue descriptions and verification comments link to that evidence.
-The server stores atomic claims and retry receipts alongside those cards in Overdew's database.
+Issue cards use `qa` and `project:<id>` tags. Quaz creates no run cards and writes no record files to the board.
+Reports, run screenshots, claims, and retry receipts stay in `QUAZ_DB`. Issue descriptions and verification comments link to evidence attached to the issue card.
+`bun scripts/qa/cleanup.ts` deletes old `qa-run` cards and `quaz-record-*.json` attachments. It archives them under `archive/board-cleanup` beside `QUAZ_DB` first. Cards deleted on Overdew cannot be restored.
 Tags are user-visible labels; they are not concurrency locks.
 
 Final comparison includes active, completed, and archived cards, including manual cards without QA tags.
@@ -70,7 +70,7 @@ Unlabelled cards belong to the selected board context; `project:<id>` labels exc
 The catalog includes full titles, descriptions, checklists, tags, and comments. Oversized catalogs stop the run instead of hiding issues.
 The catalog size and publication lease are bounded by constants in `src/qa_protocol.ts`.
 Recovery can renew a lease only when the original catalog still matches. Changed or uncertain comparisons produce a partial run.
-Such runs retain findings and evidence in their run report, with `needs-attention`, and create no issue cards.
+Such runs retain findings and evidence in their local run report, with `needs-attention`, and create no issue cards.
 A later fresh discovery must compare those findings again; this change does not automatically replay held reports.
 Deploy the matching API before using new workers. Old workers cannot publish findings without a duplicate review.
 
