@@ -15,6 +15,7 @@ export const INTERRUPTED = "interrupted";
 export const CATALOG_BYTES: number = 256 * 1024;
 export const SUMMARY_CHARS: number = 400;
 export const CAP_REASON: string = "open card cap";
+export const WONT_FIX_REASON: string = "won't fix";
 export const PUBLICATION_SECONDS: number = 600;
 export const MATCHING_POLL_MS: number = 1000;
 export const decision = z
@@ -49,6 +50,7 @@ export const catalog = z
           tags: z.string(),
           status: z.number().int(),
           fingerprints: z.array(z.string().regex(/^[a-f0-9]{64}$/)),
+          dismissed: z.literal(true).optional(),
         })
         .strict(),
     ),

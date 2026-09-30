@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +20,9 @@ afterEach((): void => {
   for (const folder of folders.splice(0))
     rmSync(folder, { recursive: true, force: true });
 });
-const fixture = (): {
+const fixture = (
+  repository?: string,
+): {
   state: State.State;
   cards: Map<number, Tracker.Card>;
   comments: Map<number, string[]>;
@@ -143,7 +145,7 @@ const fixture = (): {
     attachmentUrl: (id: number): string => `https://tracker.test/files/${id}`,
   };
   return {
-    state: State.open(join(folder, "state.db"), tracker),
+    state: State.open(join(folder, "state.db"), tracker, undefined, repository),
     cards,
     comments,
     files,
@@ -1105,7 +1107,7 @@ test("verification retry rejects an externally edited card", async () => {
   cards.set(issue.id, { ...issue, status: 1 });
   state.db
     .query(
-      "INSERT INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix) VALUES (?,?,?,?,?)",
     )
     .run(
       "sample",
@@ -1118,6 +1120,7 @@ test("verification retry rejects an externally edited card", async () => {
         expected: "Saved",
         scenario: "empty",
       }),
+      revision,
     );
   const run: Protocol.Run = await state.begin(begin("verify"));
   state.ready(run.id);
@@ -1159,7 +1162,7 @@ test("verification accepts tracker comment line endings", async () => {
   cards.set(issue.id, { ...issue, status: 1 });
   state.db
     .query(
-      "INSERT INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix) VALUES (?,?,?,?,?)",
     )
     .run(
       "sample",
@@ -1172,6 +1175,7 @@ test("verification accepts tracker comment line endings", async () => {
         expected: "Saved",
         scenario: "empty",
       }),
+      revision,
     );
   const run: Protocol.Run = await state.begin(begin("verify"));
   state.ready(run.id);
@@ -1324,6 +1328,7 @@ test("matched card becomes a tracked issue", async () => {
   };
   await Finish.publish(state, run.id, result);
   await state.tracker.complete(issue.id);
+  await state.fix(issue.id, revision);
 
   expect(
     (await state.state("sample")).tickets.map((ticket) => ticket.id),
@@ -2052,4 +2057,368 @@ test("publication at the cap still adds evidence to matched cards", async () => 
   expect(published.skipped).toEqual([found[1].fingerprint]);
   expect(comments.get(11)?.at(-1)).toContain("adds supporting evidence");
   expect(state.finding(11)?.fingerprint).toBe(found[0].fingerprint);
+});
+
+const REPOSITORY: string = "owner/app";
+const PULL: string = `https://github.com/${REPOSITORY}/pull/5`;
+const COMMIT: string = `https://github.com/${REPOSITORY}/commit/${"c".repeat(40)}`;
+const events = (logs: ReturnType<typeof spyOn>, name: string): unknown[] =>
+  logs.mock.calls
+    .map((call: unknown[]): unknown => JSON.parse(String(call[0])))
+    .filter(
+      (entry: unknown): boolean => (entry as { event?: string }).event === name,
+    );
+const tracked = async (
+  status: number,
+  options: { fix?: string; repository?: string } = {},
+): Promise<ReturnType<typeof fixture> & { issue: Tracker.Card }> => {
+  const setup = fixture(options.repository);
+  const created: Tracker.Card = await setup.state.tracker.create(
+    "Broken save",
+    "issue",
+  );
+  const issue: Tracker.Card = await setup.state.tracker.update(created.id, {
+    description: "Saving loses the draft",
+    tags: "qa,needs-verification,project:sample",
+  });
+  setup.cards.set(issue.id, { ...issue, status });
+  setup.state.db
+    .query(
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix) VALUES (?,?,?,?,?)",
+    )
+    .run(
+      "sample",
+      finding(0).fingerprint,
+      issue.id,
+      JSON.stringify(finding(0).test),
+      options.fix ?? null,
+    );
+
+  return { ...setup, issue };
+};
+const dismissed = (state: State.State): number[] =>
+  state.db
+    .query<{ note_id: number }, []>(
+      "SELECT note_id FROM qa_dismissed ORDER BY note_id",
+    )
+    .all()
+    .map((row): number => row.note_id);
+const discovery = async (
+  state: State.State,
+  found: Protocol.Finding[],
+  verdict: (entry: Protocol.Finding) => Protocol.Matching["decisions"][number],
+): Promise<Finish.Result> => {
+  const run: Protocol.Run = await state.begin(begin("discover"));
+  state.ready(run.id);
+  await state.claim(run.id, found[0].test.flow, "Save retains text");
+  const catalog: Protocol.Catalog | null = await state.publication(run.id);
+  if (!catalog) throw new Error("Publication lease missing");
+
+  return Finish.publish(state, run.id, {
+    status: "complete",
+    summary: "Reproduced",
+    report: {},
+    findings: found,
+    evidence: [],
+    verdict: "none",
+    deployment: null,
+    matching: { snapshot: catalog.snapshot, decisions: found.map(verdict) },
+  });
+};
+const choose =
+  (
+    verdict: "new" | "existing" | "same-run",
+    target: number | null,
+    sameAs: string | null = null,
+  ): ((entry: Protocol.Finding) => Protocol.Matching["decisions"][number]) =>
+  (entry) => ({
+    fingerprint: entry.fingerprint,
+    verdict,
+    target,
+    sameAs,
+    reason: "Reviewer choice",
+  });
+
+test("completed card without a fix is dismissed", async () => {
+  const { state, issue } = await tracked(COMPLETED);
+
+  expect((await state.state("sample")).tickets).toEqual([]);
+  expect(dismissed(state)).toEqual([issue.id]);
+  expect(
+    state.db
+      .query<{ title: string; summary: string }, []>(
+        "SELECT title,summary FROM qa_dismissed",
+      )
+      .get(),
+  ).toEqual({ title: "Broken save", summary: "Saving loses the draft" });
+});
+
+test("archived card without a fix is dismissed", async () => {
+  const { state, issue } = await tracked(ARCHIVED);
+
+  expect((await state.state("sample")).tickets).toEqual([]);
+  expect(dismissed(state)).toEqual([issue.id]);
+});
+
+test("completed card with a fix link is verified, not dismissed", async () => {
+  const { state, issue, comments } = await tracked(COMPLETED, {
+    repository: REPOSITORY,
+  });
+  comments.set(issue.id, ["Fixed in https://github.com/other/app/pull/9"]);
+
+  expect((await state.state("sample")).tickets).toEqual([]);
+  expect(dismissed(state)).toEqual([issue.id]);
+
+  comments.set(issue.id, [`Fixed in ${PULL}`]);
+
+  expect(
+    (await state.state("sample")).tickets.map((ticket) => ticket.id),
+  ).toEqual([issue.id]);
+  expect(dismissed(state)).toEqual([]);
+});
+
+test("completed card with an unmerged PR link is not dismissed", async () => {
+  const { state, issue, comments } = await tracked(COMPLETED, {
+    repository: REPOSITORY,
+  });
+  comments.set(issue.id, [`Opened ${PULL}, review pending`]);
+
+  await state.state("sample");
+
+  expect(dismissed(state)).toEqual([]);
+});
+
+test("completed card with a commit link is not dismissed", async () => {
+  const { state, issue, comments } = await tracked(COMPLETED, {
+    repository: REPOSITORY,
+  });
+  comments.set(issue.id, [`Fixed by ${COMMIT}`]);
+
+  await state.state("sample");
+
+  expect(dismissed(state)).toEqual([]);
+});
+
+test("completed card with a recorded fix is verified, not dismissed", async () => {
+  const { state, issue } = await tracked(COMPLETED, { fix: revision });
+
+  expect(
+    (await state.state("sample")).tickets.map((ticket) => ticket.id),
+  ).toEqual([issue.id]);
+  expect(dismissed(state)).toEqual([]);
+});
+
+test("a fix link without a configured repository does not count", async () => {
+  const { state, comments, issue } = await tracked(COMPLETED);
+  comments.set(issue.id, [`Fixed in ${PULL}`]);
+
+  expect((await state.state("sample")).tickets).toEqual([]);
+  expect(dismissed(state)).toEqual([issue.id]);
+});
+
+test("fix recorded after dismissal brings the card back", async () => {
+  const { state, issue } = await tracked(COMPLETED);
+  await state.state("sample");
+  await state.fix(issue.id, revision);
+
+  expect(
+    (await state.state("sample")).tickets.map((ticket) => ticket.id),
+  ).toEqual([issue.id]);
+  expect(dismissed(state)).toEqual([]);
+});
+
+test("dismissal is logged once", async () => {
+  const logs = spyOn(console, "log").mockImplementation((): void => {});
+  try {
+    const { state, issue } = await tracked(COMPLETED);
+    await state.state("sample");
+    await state.state("sample");
+    await state.catalog("sample");
+
+    expect(events(logs, "finding-dismissed")).toEqual([
+      { event: "finding-dismissed", card: issue.id, project: "sample" },
+    ]);
+  } finally {
+    logs.mockRestore();
+  }
+});
+
+test("dismissed card is never reopened by its fingerprint", async () => {
+  const { state, cards, comments, issue } = await tracked(COMPLETED);
+  const found: Protocol.Finding = { ...finding(0), evidence: [] };
+
+  const published: Finish.Result = await discovery(
+    state,
+    [found],
+    choose("new", null),
+  );
+
+  expect(published.cards).toEqual([]);
+  expect(published.created).toEqual([]);
+  expect(published.dismissed).toEqual([found.fingerprint]);
+  expect(cards.get(issue.id)?.status).toBe(COMPLETED);
+  expect(comments.get(issue.id) ?? []).toEqual([]);
+  expect(cards.size).toBe(1);
+});
+
+test("finding matching a dismissed card writes nothing", async () => {
+  const logs = spyOn(console, "log").mockImplementation((): void => {});
+  try {
+    const { state, cards, comments, issue } = await tracked(ARCHIVED);
+    const other: Protocol.Finding = {
+      ...finding(0),
+      fingerprint: "d".repeat(64),
+      evidence: [],
+    };
+    const twin: Protocol.Finding = { ...other, fingerprint: "e".repeat(64) };
+    const version: number | undefined = cards.get(issue.id)?.version;
+
+    const published: Finish.Result = await discovery(
+      state,
+      [other, twin],
+      (entry) =>
+        entry === other
+          ? choose("existing", issue.id)(entry)
+          : choose("same-run", null, other.fingerprint)(entry),
+    );
+
+    expect(published.cards).toEqual([]);
+    expect(published.created).toEqual([]);
+    expect(published.dismissed).toEqual([other.fingerprint, twin.fingerprint]);
+    expect(cards.size).toBe(1);
+    expect(cards.get(issue.id)?.version).toBe(version);
+    expect(cards.get(issue.id)?.status).toBe(ARCHIVED);
+    expect(comments.get(issue.id) ?? []).toEqual([]);
+    const saved = JSON.parse(
+      state.db
+        .query<{ report: string }, [string]>(
+          "SELECT report FROM qa_runs WHERE id=?",
+        )
+        .get(published.run.id)?.report ?? "{}",
+    ) as { dismissed: { reason: string; findings: Protocol.Finding[] } };
+    expect(saved.dismissed.reason).toBe(Protocol.WONT_FIX_REASON);
+    expect(saved.dismissed.findings).toHaveLength(2);
+    expect(events(logs, "run-finished")).toEqual([
+      expect.objectContaining({ dismissed: 2, skipped: 0, created: 0 }),
+    ]);
+  } finally {
+    logs.mockRestore();
+  }
+});
+
+test("catalog includes dismissed cards flagged", async () => {
+  const { state, cards, issue } = await tracked(COMPLETED);
+  cards.set(9, { ...card(9, ACTIVE), tags: "qa,project:sample" });
+
+  const entries = (await state.catalog("sample")).cards;
+
+  expect(entries.map((entry) => entry.id)).toEqual([9, issue.id]);
+  expect(entries[0].dismissed).toBeUndefined();
+  expect(entries[1]).toEqual({
+    id: issue.id,
+    version: 0,
+    title: "Broken save",
+    summary: "Saving loses the draft",
+    tags: "qa,project:sample",
+    status: COMPLETED,
+    fingerprints: [finding(0).fingerprint],
+    dismissed: true,
+  });
+});
+
+test("catalog limit counts dismissed cards", async () => {
+  const { state, issue } = await tracked(COMPLETED);
+  await state.catalog("sample");
+  state.db
+    .query("UPDATE qa_dismissed SET title=? WHERE note_id=?")
+    .run("x".repeat(Protocol.CATALOG_BYTES), issue.id);
+
+  await expect(state.catalog("sample")).rejects.toThrow("review limit");
+});
+
+test("dismissed card does not count against the open card cap", async () => {
+  const { state } = await tracked(COMPLETED);
+
+  expect((await state.state("sample")).open).toBe(0);
+});
+
+test("deleted card is forgotten and can be filed again", async () => {
+  const logs = spyOn(console, "log").mockImplementation((): void => {});
+  try {
+    const { state, cards, issue } = await tracked(COMPLETED);
+    await state.state("sample");
+    cards.set(issue.id, card(issue.id, 2));
+
+    await state.state("sample");
+    await state.state("sample");
+
+    expect(dismissed(state)).toEqual([]);
+    expect(
+      state.db.query("SELECT 1 FROM qa_findings WHERE note_id=?").get(issue.id),
+    ).toBeNull();
+    expect(events(logs, "finding-forgotten")).toEqual([
+      { event: "finding-forgotten", card: issue.id, project: "sample" },
+    ]);
+    expect((await state.catalog("sample")).cards).toEqual([]);
+
+    const run: Protocol.Run = await state.begin(begin("discover"));
+    const attachment: number = state.store(
+      run.id,
+      "proof.txt",
+      PROOF,
+      "text/plain",
+    );
+    const published: Finish.Result = await publishIssue(state, run, attachment);
+
+    expect(published.created).toHaveLength(1);
+    expect(published.created[0]).not.toBe(issue.id);
+  } finally {
+    logs.mockRestore();
+  }
+});
+
+test("card missing from the tracker is forgotten", async () => {
+  const { state, cards, issue } = await tracked(COMPLETED);
+  cards.delete(issue.id);
+
+  await state.state("sample");
+
+  expect(
+    state.db.query("SELECT 1 FROM qa_findings WHERE note_id=?").get(issue.id),
+  ).toBeNull();
+});
+
+test("reopened dismissed card is restored", async () => {
+  const logs = spyOn(console, "log").mockImplementation((): void => {});
+  try {
+    const { state, cards, issue } = await tracked(COMPLETED);
+    await state.state("sample");
+
+    expect(dismissed(state)).toEqual([issue.id]);
+
+    const current: Tracker.Card | undefined = cards.get(issue.id);
+    if (!current) throw new Error("Card missing");
+    cards.set(issue.id, { ...current, status: ACTIVE });
+    await state.state("sample");
+    await state.state("sample");
+
+    expect(dismissed(state)).toEqual([]);
+    expect(events(logs, "finding-restored")).toEqual([
+      { event: "finding-restored", card: issue.id, project: "sample" },
+    ]);
+  } finally {
+    logs.mockRestore();
+  }
+});
+
+test("deleted card under a live verification run keeps its finding", async () => {
+  const { state, cards, issue } = await tracked(COMPLETED, { fix: revision });
+  const run: Protocol.Run = await state.begin(begin("verify"));
+  state.ready(run.id);
+  await state.claim(run.id, `ticket-${issue.id}`, "Saved", issue.id);
+  cards.set(issue.id, card(issue.id, 2));
+
+  await state.state("sample");
+
+  expect(state.finding(issue.id)?.fix).toBe(revision);
 });

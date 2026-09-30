@@ -40,6 +40,9 @@ Codex is the first provider. Provider invocation is isolated in `scripts/qa/prov
 - An unavailable or different deployment leaves verification pending without a mention.
 - A changed card or expired claim prevents an old result from changing the card.
 - A newly reproduced issue reopens its original card. Older discovery cannot undo newer verification.
+- Complete a QA card with a fix reference and Quaz verifies the fix. A fix reference is a recorded fix revision, or a GitHub pull request or commit link to `deployment.repository` in the description or comments. The link can be unmerged.
+- Complete a QA card without a fix reference and Quaz treats it as won't fix. It never reopens, verifies, or files that finding or its root cause again. Reopen the card to undo.
+- Delete a QA card and Quaz forgets it. The same finding can later become a new card.
 - Retries preserve one run, finding, artifact, and result comment.
 - Existing human tags and descriptions remain intact.
 - Reports for partial, failed, empty, and successful runs remain in Overdew.

@@ -490,6 +490,7 @@ export const start = async (
       project.id,
       undefined,
       settings.cap,
+      project.deployment?.repository,
     );
     opened = client;
     const destination: string = JSON.stringify({

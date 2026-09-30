@@ -31,6 +31,7 @@ export type Result = {
   replayed: boolean;
   held?: string;
   skipped?: string[];
+  dismissed?: string[];
 };
 
 const evidence = (state: State.State, run: string, ids: number[]): void => {
@@ -178,6 +179,19 @@ const issueCard = (
     },
   };
 };
+const dismissal = (
+  state: State.State,
+  project: string,
+  fingerprint: string,
+  target: number | null,
+): boolean =>
+  Boolean(
+    state.db
+      .query(
+        "SELECT 1 FROM qa_dismissed WHERE project=? AND (note_id=? OR note_id IN (SELECT note_id FROM qa_findings WHERE project=? AND fingerprint=?))",
+      )
+      .get(project, target, project, fingerprint),
+  );
 const closed = async (
   state: State.State,
   run: Protocol.Run,
@@ -188,7 +202,7 @@ const closed = async (
       "SELECT note_id FROM qa_findings WHERE project=? AND fingerprint=?",
     )
     .get(run.project, fingerprint);
-  if (!known) return null;
+  if (!known || dismissal(state, run.project, fingerprint, null)) return null;
   const card: Tracker.Card | null = await state.tracker.get(known.note_id);
   if (!card) return null;
   const reopened: boolean = Boolean(
@@ -227,6 +241,7 @@ const match = async (
     fail("Duplicate review must cover each finding exactly once");
   const seen: Set<string> = new Set();
   const reopening: Set<string> = new Set();
+  const wont: Set<string> = new Set();
   let mismatch: boolean = false;
   for (const choice of plan.decisions) {
     if (!expected.has(choice.fingerprint) || seen.has(choice.fingerprint))
@@ -258,7 +273,11 @@ const match = async (
     const exact = current.cards.find((card): boolean =>
       card.fingerprints.includes(choice.fingerprint),
     );
-    if (exact && (choice.verdict !== "existing" || choice.target !== exact.id))
+    if (exact?.dismissed) wont.add(choice.fingerprint);
+    else if (
+      exact &&
+      (choice.verdict !== "existing" || choice.target !== exact.id)
+    )
       mismatch = true;
     if (!exact && (await closed(state, run, choice.fingerprint))) {
       if (["new", "uncertain"].includes(choice.verdict))
@@ -271,7 +290,9 @@ const match = async (
     return "Duplicate review disagreed with an exact fingerprint match. Findings remain unpublished and require a fresh duplicate review.";
   return plan.decisions.some(
     (item): boolean =>
-      item.verdict === "uncertain" && !reopening.has(item.fingerprint),
+      item.verdict === "uncertain" &&
+      !reopening.has(item.fingerprint) &&
+      !wont.has(item.fingerprint),
   )
     ? "Duplicate review is uncertain. Findings remain unpublished for review."
     : null;
@@ -297,6 +318,7 @@ export const publish = async (
       created: number[];
       held?: string;
       skipped?: string[];
+      dismissed?: string[];
     };
     return {
       run,
@@ -305,6 +327,7 @@ export const publish = async (
       replayed: true,
       ...(saved.held ? { held: saved.held } : {}),
       ...(saved.skipped ? { skipped: saved.skipped } : {}),
+      ...(saved.dismissed ? { dismissed: saved.dismissed } : {}),
     };
   }
   const pending = state.db
@@ -540,6 +563,8 @@ export const publish = async (
     }
     const destinations: Map<string, number> = new Map();
     const skipped: Protocol.Finding[] = [];
+    const dismissed: Protocol.Finding[] = [];
+    const wont: Set<string> = new Set();
     const open: number =
       run.mode === "discover" && input.findings.length && !expired && !held
         ? await state.count(run.project)
@@ -559,6 +584,14 @@ export const publish = async (
           )
           .get(run.project, finding.test.flow, id, Date.now());
         if (!owned) fail("Discovery no longer owns its flow");
+        if (
+          (choice.sameAs !== null && wont.has(choice.sameAs)) ||
+          dismissal(state, run.project, finding.fingerprint, choice.target)
+        ) {
+          wont.add(finding.fingerprint);
+          dismissed.push(finding);
+          continue;
+        }
         const revived: Tracker.Card | null = await closed(
           state,
           run,
@@ -771,6 +804,11 @@ export const publish = async (
             skipped: skipped.map((entry): string => entry.fingerprint),
           }
         : {}),
+      ...(dismissed.length
+        ? {
+            dismissed: dismissed.map((entry): string => entry.fingerprint),
+          }
+        : {}),
     };
     state.db.transaction((): void => {
       state.db
@@ -796,6 +834,14 @@ export const publish = async (
             ...(skipped.length
               ? {
                   skipped: { reason: Protocol.CAP_REASON, findings: skipped },
+                }
+              : {}),
+            ...(dismissed.length
+              ? {
+                  dismissed: {
+                    reason: Protocol.WONT_FIX_REASON,
+                    findings: dismissed,
+                  },
                 }
               : {}),
           }),
@@ -832,6 +878,7 @@ export const publish = async (
         cards: cards.length,
         created: created.length,
         skipped: skipped.length,
+        dismissed: dismissed.length,
       }),
     );
     return {
@@ -841,6 +888,7 @@ export const publish = async (
       replayed: false,
       ...(held ? { held } : {}),
       ...(result.skipped ? { skipped: result.skipped } : {}),
+      ...(result.dismissed ? { dismissed: result.dismissed } : {}),
     };
   } catch (error: unknown) {
     state.db.query("UPDATE qa_runs SET publish_lease=0 WHERE id=?").run(id);
