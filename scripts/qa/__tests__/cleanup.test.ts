@@ -368,3 +368,14 @@ test("deletes only record attachments on finding cards", async () => {
   expect(summary).toEqual({ event: "board-cleanup", cards: 0, records: 1 });
   expect(f.removed).toEqual([`attachment:${record}`]);
 });
+
+test("excludes run cards belonging to another project", async () => {
+  const f = fixture();
+  const deletable: number = f.add("Run", RUN_TAGS);
+  f.add("Other project run", "qa-run,project:other");
+
+  const summary = await Cleanup.cleanup(f.input(1));
+
+  expect(summary).toEqual({ event: "board-cleanup", cards: 1, records: 0 });
+  expect(f.removed).toEqual([`note:${deletable}`]);
+});

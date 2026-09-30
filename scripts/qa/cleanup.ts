@@ -106,10 +106,14 @@ export const plan = async (
   const known: Set<number> = referenced(db);
   const runs: Tracker.Card[] = cards.filter((card): boolean => {
     const labels: Set<string> = State.tags(card.tags);
+    const projects: string[] = [...labels].filter((label): boolean =>
+      label.startsWith("project:"),
+    );
 
     return (
       !labels.has(Protocol.TAG.issue) &&
       !known.has(card.id) &&
+      (!projects.length || projects.includes(`project:${project}`)) &&
       (labels.has(Protocol.TAG.run) || State.isRunCard(card))
     );
   });
