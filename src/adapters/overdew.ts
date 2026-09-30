@@ -389,7 +389,7 @@ export const connect = (
       );
     },
     recover: async (key: string): Promise<Tracker.Card | null> =>
-      (await tracker.list()).find((card): boolean =>
+      (await tracker.list(Tracker.STATUSES)).find((card): boolean =>
         card.title.endsWith(marker(key)),
       ) ?? null,
     update: async (

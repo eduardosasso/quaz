@@ -519,6 +519,29 @@ test("listing can request every status", async () => {
   expect(requested).toEqual(["active,completed,archived", "completed"]);
 });
 
+test("recover searches every status, not just active cards", async () => {
+  const requested: (string | null)[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+    const url: string = String(input);
+    if (url.endsWith("/boards/destinations"))
+      return Response.json([{ id: 1, workspace: "owner", slug: "board" }]);
+    if (url.includes("/notes/search")) {
+      requested.push(new URL(url).searchParams.get("status"));
+
+      return Response.json({ notes: [], nextCursor: null });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  await tracker.recover("save-key");
+
+  expect(requested).toEqual(["active,completed,archived"]);
+});
+
 test("remover deletes cards and attachments and treats 404 as gone", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async (
