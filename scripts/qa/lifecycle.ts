@@ -6,6 +6,7 @@ import * as Duplicates from "@qa/duplicates";
 import * as Project from "@qa/project";
 import * as Review from "@qa/review";
 import { z } from "zod";
+import * as Fix from "@/fix";
 import * as Protocol from "@/qa_protocol";
 
 export type Plan = {
@@ -34,22 +35,31 @@ const resolveFix = async (
 ): Promise<string | null> => {
   if (!project.deployment?.repository) return ticket.fix;
   const comments: string[] = await client.comments(ticket.id);
-  const text: string = `${ticket.description}\n${JSON.stringify(comments)}`;
-  const pattern: RegExp =
-    /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g;
-  const links: Array<RegExpMatchArray> = Array.from(
-    text.matchAll(pattern),
-  ).filter((match): boolean => match[1] === project.deployment?.repository);
-  const link: RegExpMatchArray | undefined = links.at(-1);
-  if (!link) return ticket.fix;
+  const link: Fix.Pull | null = Fix.pull(
+    ticket.description,
+    comments,
+    project.deployment.repository,
+  );
+  if (!link) {
+    const commit: string | null = Fix.commit(
+      ticket.description,
+      comments,
+      project.deployment.repository,
+    );
+    if (!commit) return ticket.fix;
+    await client.request(`/cards/${ticket.id}/fix`, "PUT", {
+      revision: commit,
+    });
+    return commit;
+  }
   const child = Bun.spawn(
     [
       "gh",
       "pr",
       "view",
-      link[2],
+      link.number,
       "--repo",
-      link[1],
+      link.repository,
       "--json",
       "state,mergeCommit",
     ],

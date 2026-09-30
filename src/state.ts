@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import * as Fix from "@/fix";
 import * as Pool from "@/pool";
 import * as Protocol from "@/qa_protocol";
 import type * as Tracker from "@/tracker";
@@ -28,7 +29,10 @@ const RUN_COLUMNS: string =
   "id,note_id,board_id,owner,project,mode,revision,scenario,attention,runner,status,expires,target,snapshot,receipt,request,result,started,publish,publish_lease,publish_held,publish_target_version,publish_target_step,recorded";
 const HISTORY_LIMIT: number = 100;
 export const CARD_READS: number = 4;
-const CLOSED: readonly number[] = [1, 3];
+const COMPLETED: number = 1;
+const ARCHIVED: number = 3;
+const CLOSED: readonly number[] = [COMPLETED, ARCHIVED];
+const DISMISSED_VERSION: number = 0;
 const ELLIPSIS: string = "…";
 export const DELETED: number = 2;
 const digest = (value: unknown): string =>
@@ -132,6 +136,10 @@ export const prepare = (db: Database): void => {
       verified_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project,fingerprint)
     );
+    CREATE TABLE IF NOT EXISTS qa_dismissed (
+      project TEXT NOT NULL, note_id INTEGER PRIMARY KEY,
+      title TEXT NOT NULL, summary TEXT NOT NULL, dismissed_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS qa_artifacts (
       run TEXT NOT NULL REFERENCES qa_runs(id), path TEXT NOT NULL,
       digest TEXT NOT NULL, mime TEXT NOT NULL, attachment INTEGER NOT NULL,
@@ -209,6 +217,7 @@ export const open = (
   path: string | Database,
   tracker: Tracker.Tracker,
   directory?: string,
+  repository?: string,
 ): State => {
   const db: Database =
     typeof path === "string" ? new Database(path, { create: true }) : path;
@@ -372,7 +381,112 @@ export const open = (
       ).run(Date.now(), Date.now() + Protocol.LEASE_SECONDS * MILLISECONDS, id);
       return run(id);
     })();
+  const forget = (project: string, note: number): void => {
+    const held: boolean = LIVE.some((status): boolean =>
+      Boolean(
+        db
+          .query("SELECT 1 FROM qa_runs WHERE target=? AND status=?")
+          .get(note, status),
+      ),
+    );
+    if (held) return;
+    const removed: number = db.transaction((): number => {
+      db.query("DELETE FROM qa_dismissed WHERE note_id=?").run(note);
+
+      return db.query("DELETE FROM qa_findings WHERE note_id=?").run(note)
+        .changes;
+    })();
+    if (removed)
+      console.log(
+        JSON.stringify({ event: "finding-forgotten", card: note, project }),
+      );
+  };
+  const settle = (
+    project: string,
+    card: Tracker.Card,
+    rows: FindingRow[],
+    dismissed: Set<number>,
+  ): void => {
+    const fixed: boolean =
+      rows.some(
+        (row): boolean => row.note_id === card.id && Boolean(row.fix),
+      ) ||
+      Boolean(
+        repository &&
+          Fix.reference(card.description, card.comments, repository),
+      );
+    const wontfix: boolean =
+      CLOSED.includes(card.status) &&
+      !fixed &&
+      tags(card.tags).has(Protocol.TAG.issue);
+    if (wontfix) {
+      const added = db
+        .query(
+          "INSERT OR IGNORE INTO qa_dismissed (project,note_id,title,summary,dismissed_at) VALUES (?,?,?,?,?)",
+        )
+        .run(
+          project,
+          card.id,
+          card.title,
+          summary(card.description),
+          Date.now(),
+        );
+      dismissed.add(card.id);
+      if (added.changes)
+        console.log(
+          JSON.stringify({
+            event: "finding-dismissed",
+            card: card.id,
+            project,
+          }),
+        );
+    } else if (dismissed.delete(card.id)) {
+      db.query("DELETE FROM qa_dismissed WHERE note_id=?").run(card.id);
+      console.log(
+        JSON.stringify({ event: "finding-restored", card: card.id, project }),
+      );
+    }
+  };
+  const review = async (
+    project: string,
+  ): Promise<{
+    rows: FindingRow[];
+    cards: (Tracker.Card | null)[];
+    dismissed: Set<number>;
+  }> => {
+    const rows: FindingRow[] = db
+      .query<FindingRow, [string]>(
+        "SELECT * FROM qa_findings WHERE project=? ORDER BY note_id",
+      )
+      .all(project);
+    const cards: (Tracker.Card | null)[] = await Pool.map(
+      rows,
+      CARD_READS,
+      (row): Promise<Tracker.Card | null> => tracker.get(row.note_id),
+    );
+    const dismissed: Set<number> = new Set(
+      db
+        .query<{ note_id: number }, [string]>(
+          "SELECT note_id FROM qa_dismissed WHERE project=?",
+        )
+        .all(project)
+        .map((row): number => row.note_id),
+    );
+    const seen: Set<number> = new Set();
+    for (const [index, row] of rows.entries()) {
+      if (seen.has(row.note_id)) continue;
+      seen.add(row.note_id);
+      const card: Tracker.Card | null = cards[index];
+      if (!card || card.status === DELETED) {
+        dismissed.delete(row.note_id);
+        forget(project, row.note_id);
+      } else settle(project, card, rows, dismissed);
+    }
+
+    return { rows, cards, dismissed };
+  };
   const catalog = async (project: string): Promise<Protocol.Catalog> => {
+    await review(project);
     const cards: Tracker.Card[] = await tracker.list();
     for (const intent of db
       .query<{ run: string; fingerprint: string; key: string }, []>(
@@ -477,6 +591,27 @@ export const open = (
         status: card.status,
         fingerprints: known.get(card.id)?.fingerprints ?? [],
       }));
+    const listed: Set<number> = new Set(
+      selected.map((entry): number => entry.id),
+    );
+    selected.push(
+      ...db
+        .query<{ note_id: number; title: string; summary: string }, [string]>(
+          "SELECT note_id,title,summary FROM qa_dismissed WHERE project=? ORDER BY note_id",
+        )
+        .all(project)
+        .filter((row): boolean => !listed.has(row.note_id))
+        .map((row): Protocol.Catalog["cards"][number] => ({
+          id: row.note_id,
+          version: DISMISSED_VERSION,
+          title: row.title,
+          summary: row.summary,
+          tags: `${Protocol.TAG.issue},project:${project}`,
+          status: COMPLETED,
+          fingerprints: known.get(row.note_id)?.fingerprints ?? [],
+          dismissed: true,
+        })),
+    );
     if (
       new TextEncoder().encode(JSON.stringify(selected)).byteLength >
       Protocol.CATALOG_BYTES
@@ -504,21 +639,17 @@ export const open = (
         JSON.stringify({ event: "run-expired", run: value.id, project }),
       );
     }
-    const rows: FindingRow[] = db
-      .query<FindingRow, [string]>(
-        "SELECT * FROM qa_findings WHERE project=? ORDER BY note_id",
-      )
-      .all(project);
-    const cards: (Tracker.Card | null)[] = await Pool.map(
-      rows,
-      CARD_READS,
-      (row): Promise<Tracker.Card | null> => tracker.get(row.note_id),
-    );
+    const { rows, cards, dismissed } = await review(project);
     const seen: Set<number> = new Set();
     const tickets: Protocol.Ticket[] = rows.flatMap(
       (row, index): Protocol.Ticket[] => {
         const card: Tracker.Card | null = cards[index];
-        if (!card || !CLOSED.includes(card.status) || seen.has(card.id))
+        if (
+          !card ||
+          !CLOSED.includes(card.status) ||
+          dismissed.has(card.id) ||
+          seen.has(card.id)
+        )
           return [];
         seen.add(card.id);
         const labels: Set<string> = tags(card.tags);

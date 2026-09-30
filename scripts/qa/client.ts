@@ -280,6 +280,7 @@ export const open = async (
   project: string,
   authority?: Tracker.Authority,
   cap: number = CONFIG.controller.cap,
+  repository?: string,
 ): Promise<Client> => {
   const selected: string = Protocol.key.parse(project);
   const file: string =
@@ -296,6 +297,7 @@ export const open = async (
       database,
       adapter,
       join(dirname(file), State.ARTIFACTS),
+      repository,
     );
     destination(state.db, url, board);
     await Migrate.records(state.db, adapter);

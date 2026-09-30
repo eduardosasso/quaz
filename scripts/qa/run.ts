@@ -472,6 +472,9 @@ export const run = async (
       input.board,
       process.env.QUAZ_TRACKER_TOKEN ?? "",
       project.id,
+      undefined,
+      undefined,
+      project.deployment?.repository,
     ));
   try {
     if (input.resume) {

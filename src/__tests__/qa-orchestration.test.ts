@@ -199,6 +199,55 @@ describe("QA orchestration boundaries", (): void => {
     }
   });
 
+  test("a commit link resolves the fix without a pull request", async (): Promise<void> => {
+    const process = spyOn(Bun, "spawn");
+    const fixed: unknown[] = [];
+    const latest: Client.Client = {
+      ...client([{ ...TICKET, fix: null }]),
+      comments: async (): Promise<string[]> => [
+        `Fixed directly: https://github.com/example/app/commit/${NEXT_REVISION}`,
+      ],
+      request: async <T>(
+        path: string,
+        _method?: string,
+        body?: unknown,
+      ): Promise<T> => {
+        if (path.endsWith("/fix")) {
+          fixed.push(body);
+          return body as T;
+        }
+        return await client([{ ...TICKET, fix: null }]).request<T>(path);
+      },
+    };
+    const transportRequest: typeof fetch = Object.assign(
+      async (): Promise<Response> => Response.json({ revision: NEXT_REVISION }),
+      { preconnect: globalThis.fetch.preconnect },
+    );
+    const transport = spyOn(globalThis, "fetch").mockImplementation(
+      transportRequest,
+    );
+    try {
+      const result: Lifecycle.Plan = await Lifecycle.plan(
+        latest,
+        { ...RUN, revision: NEXT_REVISION },
+        {
+          ...PROJECT,
+          deployment: {
+            url: "https://sample.example/version",
+            repository: "example/app",
+          },
+        },
+      );
+      expect(result.result).toBeNull();
+      expect(result.deployment?.expected).toBe(NEXT_REVISION);
+      expect(fixed).toEqual([{ revision: NEXT_REVISION }]);
+      expect(process).not.toHaveBeenCalled();
+    } finally {
+      transport.mockRestore();
+      process.mockRestore();
+    }
+  });
+
   test("pending recovery rechecks deployment before publishing pass", async (): Promise<void> => {
     const recovery: string = join(directory, "pending-recovery");
     await mkdir(recovery);
