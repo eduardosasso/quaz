@@ -156,7 +156,7 @@ export const bindingSchema = z
         Math.abs(
           entry.data.rootSize -
             (value.measurements.find(
-              (baseline): boolean => baseline.condition === "mobile",
+              (baseline): boolean => baseline.condition === "reduced-motion",
             )?.data.rootSize ?? 0) *
               TEXT_SCALE,
         ) > ROOT_TOLERANCE
