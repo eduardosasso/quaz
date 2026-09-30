@@ -8,6 +8,7 @@ const MILLISECONDS: number = 1000;
 const HISTORY_LIMIT: number = 100;
 const CLOSED: readonly number[] = [1, 3];
 const DELETED: number = 2;
+const ARCHIVED: number = 3;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const tags = (value: string): Set<string> =>
@@ -360,6 +361,7 @@ export const open = (
         const managed = known.get(card.id);
         return (
           card.status !== DELETED &&
+          card.status !== ARCHIVED &&
           !runs.has(card.id) &&
           !activePending.has(card.id) &&
           !labels.has(Protocol.TAG.run) &&

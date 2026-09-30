@@ -510,8 +510,8 @@ export const run = async (
           request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "",
         );
         if (!authority) return new Response("Unauthorized", { status: 401 });
+        const path: string = new URL(request.url).pathname;
         try {
-          const path: string = new URL(request.url).pathname;
           if (path === "/catalog" && request.method === "GET")
             return Response.json(
               await client.request(
@@ -556,7 +556,15 @@ export const run = async (
             );
           }
           return new Response("Not found", { status: 404 });
-        } catch {
+        } catch (error: unknown) {
+          console.error(
+            JSON.stringify({
+              event: "coverage-error",
+              run: authority.run.id,
+              path,
+              error: String(error),
+            }),
+          );
           return new Response("Coverage unavailable", { status: 503 });
         }
       },
