@@ -109,6 +109,13 @@ The runner computes totals with the measured denominator. Every score needs obse
 
 Confirm a candidate only when its expected behavior follows from the user goal or supplied design guidance. Reproducing a visual fact alone does not prove a defect. Reject unsupported preferences. Accept intentional behavior when it satisfies the task and design criteria; deliberate choices can still have supported design concerns.
 
+## Candidate scope
+
+File one candidate per root cause. When the same defect affects several controls or screens, file one candidate that lists every affected place in its steps and actual result.
+A defect with the same root cause as an issue in the existing catalog is that card's match, not a new candidate.
+Do not file pure visual preferences, or findings whose own evidence says the behavior may be intentional.
+Clipping or truncation seen only under the 200% text check is not a defect unless content becomes unreadable or a control becomes unusable.
+
 ## Independent validator
 
 Repeat the supplied candidate steps in a fresh mobile browser context. Do not discover or claim another flow.

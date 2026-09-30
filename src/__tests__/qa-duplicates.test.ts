@@ -25,11 +25,9 @@ const catalog = (fingerprint: string | null): Protocol.Catalog => ({
       id: 1,
       version: 1,
       title: "The changed title disappears",
-      description: "",
-      checklist: "",
+      summary: "",
       tags: "",
       status: 0,
-      comments: [],
       fingerprints: fingerprint ? [fingerprint] : [],
     },
   ],
@@ -87,6 +85,15 @@ describe("QA duplicate review prompt", (): void => {
     expect(text).toContain("untrusted data");
     expect(text).toContain(FINGERPRINT);
     expect(text).toContain(candidate.title);
+  });
+  test("sends only compact catalog cards", (): void => {
+    const board: Protocol.Catalog = catalog(null);
+    board.cards[0].summary = "Summary of the existing card";
+    const text: string = Duplicates.prompt(board, [candidate]);
+    expect(text).toContain("Summary of the existing card");
+    expect(text).not.toContain("checklist");
+    expect(text).not.toContain('"comments"');
+    expect(text).toContain("same root cause");
   });
 });
 

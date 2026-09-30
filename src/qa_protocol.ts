@@ -13,6 +13,8 @@ export const LEASE_SECONDS: number = 3600;
 export const SCHEDULE_HISTORY: number = 10;
 export const INTERRUPTED = "interrupted";
 export const CATALOG_BYTES: number = 256 * 1024;
+export const SUMMARY_CHARS: number = 400;
+export const CAP_REASON: string = "open card cap";
 export const PUBLICATION_SECONDS: number = 600;
 export const MATCHING_POLL_MS: number = 1000;
 export const decision = z
@@ -43,11 +45,9 @@ export const catalog = z
           id: z.number().int().positive(),
           version: z.number().int(),
           title: z.string(),
-          description: z.string(),
-          checklist: z.string(),
+          summary: z.string(),
           tags: z.string(),
           status: z.number().int(),
-          comments: z.array(z.string()),
           fingerprints: z.array(z.string().regex(/^[a-f0-9]{64}$/)),
         })
         .strict(),
@@ -150,5 +150,6 @@ export type State = {
   flows: Flow[];
   tickets: Ticket[];
   runs: Run[];
+  open: number;
   scheduledRevision?: string;
 };

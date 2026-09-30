@@ -44,6 +44,7 @@ export const schema = z
       .min(1)
       .max(Protocol.SCHEDULE_HISTORY)
       .default(CONFIG.controller.attempts),
+    cap: z.number().int().positive().default(CONFIG.controller.cap),
     runs: z.number().int().nonnegative().default(0),
     seconds: z
       .number()
@@ -98,6 +99,8 @@ export const available = (
 
   return now >= timestamp(history[0]) + wait * Backoff.MILLISECONDS;
 };
+export const capped = (settings: Settings, state: Protocol.State): boolean =>
+  ["auto", "discover"].includes(settings.mode) && state.open >= settings.cap;
 export const plans = (
   settings: Settings,
   project: Project.Project,
@@ -137,6 +140,7 @@ export const plans = (
   const mode: Protocol.Mode = settings.mode === "smoke" ? "smoke" : "discover";
   if (
     settings.mode === "verify" ||
+    capped(settings, state) ||
     jobs.length >= free ||
     active.some((job): boolean => job.mode === mode)
   )
@@ -296,6 +300,7 @@ export const loop = async (
   let failedRuns: number = 0;
   let consecutiveFailures: number = 0;
   let retryAfter: number = 0;
+  let holding: boolean = false;
   try {
     while (!signal.aborted) {
       if (settings.runs && launched >= settings.runs && !active.size) break;
@@ -316,6 +321,23 @@ export const loop = async (
         }
         const state: Protocol.State = await dependencies.state(revision);
         signal.throwIfAborted();
+        const full: boolean = capped(settings, state);
+        if (full !== holding) {
+          dependencies.log(
+            full
+              ? {
+                  event: "discover-paused",
+                  open: state.open,
+                  cap: settings.cap,
+                }
+              : {
+                  event: "discover-resumed",
+                  open: state.open,
+                  cap: settings.cap,
+                },
+          );
+          holding = full;
+        }
         const remaining: number = settings.runs
           ? settings.runs - launched
           : settings.parallel;
@@ -466,6 +488,8 @@ export const start = async (
       input.board,
       token,
       project.id,
+      undefined,
+      settings.cap,
     );
     opened = client;
     const destination: string = JSON.stringify({
@@ -495,6 +519,7 @@ export const start = async (
       image: runtime.image,
       parallel: settings.parallel,
       mode: settings.mode,
+      cap: settings.cap,
     });
     await loop(settings, project, initial, signal, {
       revision: latest,
