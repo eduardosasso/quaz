@@ -705,16 +705,70 @@ export const technical = async (
     );
 };
 
+const UNLINKED_EVENT: string = "design-concern-unlinked";
+const UNLINKED_LIMITATION: string =
+  "Design concern without a linked candidate was recorded as unknown";
+type Judgment = Assessment["design"]["composition"];
+const linked = <T extends Pick<Judgment, "verdict" | "candidateId">>(
+  judgment: T,
+  name: string,
+  candidates: string[],
+  limitations: string[],
+): T => {
+  if (judgment.verdict !== "concern")
+    return judgment.candidateId === null
+      ? judgment
+      : ({ ...judgment, candidateId: null } as T);
+  if (
+    judgment.candidateId !== null &&
+    candidates.includes(judgment.candidateId)
+  )
+    return judgment;
+  console.log(
+    JSON.stringify({
+      event: UNLINKED_EVENT,
+      judgment: name,
+      candidate: judgment.candidateId,
+    }),
+  );
+  limitations.push(`${UNLINKED_LIMITATION} (${name})`);
+
+  return { ...judgment, verdict: "unknown", candidateId: null } as T;
+};
+const linking = (value: Assessment): Assessment => {
+  const candidates: string[] = value.candidates.map(
+    (candidate): string => candidate.id,
+  );
+  const limitations: string[] = [];
+  const comparisons: Assessment["design"]["comparisons"] =
+    value.design.comparisons.map(
+      (comparison, index: number): typeof comparison =>
+        linked(comparison, `comparison-${index}`, candidates, limitations),
+    );
+  const composition: Judgment = linked(
+    value.design.composition,
+    "composition",
+    candidates,
+    limitations,
+  );
+
+  return {
+    ...value,
+    design: { ...value.design, comparisons, composition },
+    limitations: [...value.limitations, ...limitations],
+  };
+};
+
 export const assessment = async (
   input: unknown,
   root: string,
   sourceRoot: string = resolve(import.meta.dir, "../.."),
 ): Promise<Assessment> => {
   const parsed: Assessment = assessmentSchema.parse(input);
-  const value: Assessment = {
+  const value: Assessment = linking({
     ...parsed,
     checks: checkedEvidence(parsed.checks),
-  };
+  });
   const controls: string[] = value.design.controls.map(
     (control): string => control.name,
   );
@@ -738,21 +792,6 @@ export const assessment = async (
     throw new Error(
       "Explain absent design peers only when no comparison exists",
     );
-  for (const judgment of [
-    ...value.design.comparisons,
-    value.design.composition,
-  ]) {
-    if (
-      judgment.verdict === "concern"
-        ? !value.candidates.some(
-            (candidate): boolean => candidate.id === judgment.candidateId,
-          )
-        : judgment.candidateId !== null
-    )
-      throw new Error(
-        "Each design concern must link to an existing candidate; other judgments use null",
-      );
-  }
   exact(
     value.checks.map((check): string => check.id),
     CHECKS,

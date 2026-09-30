@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   mkdir,
   mkdtemp,
@@ -302,33 +302,79 @@ afterEach(async (): Promise<void> => {
 });
 
 describe("compact QA schema", (): void => {
-  test("design concerns cannot disappear before ticket validation", async (): Promise<void> => {
+  test("unlinked design concern becomes unknown", async (): Promise<void> => {
     const input: Review.Assessment = report();
     input.design.comparisons[0].verdict = "concern";
-    await expect(Review.assessment(input, root)).rejects.toThrow(
-      "must link to an existing candidate",
-    );
-    input.design.comparisons[0].candidateId = "missing";
-    await expect(Review.assessment(input, root)).rejects.toThrow(
-      "must link to an existing candidate",
-    );
-    input.design.comparisons[0].candidateId = input.candidates[0].id;
-    await expect(Review.assessment(input, root)).resolves.toEqual(input);
     input.design.composition.verdict = "concern";
-    await expect(Review.assessment(input, root)).rejects.toThrow(
-      "must link to an existing candidate",
+    const log = spyOn(console, "log").mockImplementation((): void => {});
+    const value: Review.Assessment = await Review.assessment(input, root);
+    const events: string[] = log.mock.calls.map((call): string =>
+      String(call[0]),
     );
-    input.design.composition.candidateId = input.candidates[0].id;
-    await expect(Review.assessment(input, root)).resolves.toEqual(input);
+    log.mockRestore();
+    expect(value.design.comparisons[0].verdict).toBe("unknown");
+    expect(value.design.comparisons[0].candidateId).toBeNull();
+    expect(value.design.composition.verdict).toBe("unknown");
+    expect(value.design.composition.candidateId).toBeNull();
+    expect(value.limitations.slice(input.limitations.length)).toEqual([
+      expect.stringContaining("comparison-0"),
+      expect.stringContaining("composition"),
+    ]);
+    expect(events).toEqual([
+      JSON.stringify({
+        event: "design-concern-unlinked",
+        judgment: "comparison-0",
+        candidate: null,
+      }),
+      JSON.stringify({
+        event: "design-concern-unlinked",
+        judgment: "composition",
+        candidate: null,
+      }),
+    ]);
   });
-  test("coherent and unknown judgments cannot imply a design candidate", async (): Promise<void> => {
+  test("concern with a missing candidate becomes unknown", async (): Promise<void> => {
+    const input: Review.Assessment = report();
+    input.design.comparisons[0].verdict = "concern";
+    input.design.comparisons[0].candidateId = "missing";
+    const log = spyOn(console, "log").mockImplementation((): void => {});
+    const value: Review.Assessment = await Review.assessment(input, root);
+    const events: string[] = log.mock.calls.map((call): string =>
+      String(call[0]),
+    );
+    log.mockRestore();
+    expect(value.design.comparisons[0].verdict).toBe("unknown");
+    expect(value.design.comparisons[0].candidateId).toBeNull();
+    expect(value.limitations).toHaveLength(input.limitations.length + 1);
+    expect(events).toEqual([
+      JSON.stringify({
+        event: "design-concern-unlinked",
+        judgment: "comparison-0",
+        candidate: "missing",
+      }),
+    ]);
+  });
+  test("linked concern stays a concern", async (): Promise<void> => {
+    const input: Review.Assessment = report();
+    input.design.comparisons[0].verdict = "concern";
+    input.design.comparisons[0].candidateId = input.candidates[0].id;
+    input.design.composition.verdict = "concern";
+    input.design.composition.candidateId = input.candidates[0].id;
+    const log = spyOn(console, "log").mockImplementation((): void => {});
+    const value: Review.Assessment = await Review.assessment(input, root);
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+    expect(value).toEqual(input);
+  });
+  test("non-concern candidate link is cleared", async (): Promise<void> => {
     for (const verdict of ["coherent", "unknown"] as const) {
       const input: Review.Assessment = report();
       input.design.comparisons[0].verdict = verdict;
       input.design.comparisons[0].candidateId = input.candidates[0].id;
-      await expect(Review.assessment(input, root)).rejects.toThrow(
-        "other judgments use null",
-      );
+      const value: Review.Assessment = await Review.assessment(input, root);
+      expect(value.design.comparisons[0].verdict).toBe(verdict);
+      expect(value.design.comparisons[0].candidateId).toBeNull();
+      expect(value.limitations).toEqual(input.limitations);
     }
   });
   test("guide summaries cannot replace design comparisons", async (): Promise<void> => {
