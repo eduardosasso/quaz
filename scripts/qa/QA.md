@@ -70,7 +70,7 @@ If a feature does not exist, inspect the UI and available source, then record th
 - theming: Exercise supported theme controls and compare light/dark emulation. Inspect source tokens only when source is available.
 - integrity: Check runtime errors and broken behavior. When source is available, also run the bundled Impeccable detector and inspect its findings.
 - layout: Check grouping, spacing, hierarchy, overlap, actual scrolling or panning, and reachability across the measured widths.
-- typography: Compare computed type roles, loaded fonts, line height, long text, wrapping, clipping, and 200% text scaling.
+- typography: Compare computed type roles, loaded fonts, line height, long text, wrapping, clipping, and the 200% text-size setting.
 - adapt: Check hit areas, spacing, fixed controls, navigation, applicable touch gestures, horizontal overflow, and modal scroll locking where present.
 
 Record visual judgment before reading detector findings. Locate relevant component and style files only when source is available.
@@ -78,7 +78,7 @@ Run the browser code tool with this single expression. Replace the arguments wit
 `async (page) => await page.qaInspect("flow-key", "main", ["src/component.tsx"])`.
 Keep all arguments as JSON strings/arrays. Do not wrap this expression in other code.
 Keep the selected form or dialog open. Choose a selector matching exactly one visible surface. The helper measures the current browser page without reloading. It stores source hashes, Impeccable detector output, and browser measurements in `reviewer/technical.json`.
-It checks 320×844, 390×844, 844×390 landscape, and 1440×900, light/dark media, reduced motion, and 200% text. Read the artifact when the compact output needs context. For remote targets, the detector status is unavailable and runtime measurements remain valid.
+It checks 320×844, 390×844, 844×390 landscape, and 1440×900, light/dark media, reduced motion, and the 200% text-size setting (root font size doubled like a browser or OS text setting; rem/em text scales, px-fixed text does not). Read the artifact when the compact output needs context. For remote targets, the detector status is unavailable and runtime measurements remain valid.
 Performance, theming, and integrity checks MUST cite this artifact. Browser interaction checks cite `reviewer/events.jsonl`.
 The successful browser tool result supplies the inspection receipt.
 The helper is evidence collection, not a verdict. It does not replace real flow interactions, visual judgment, or theme controls.
@@ -114,7 +114,7 @@ Confirm a candidate only when its expected behavior follows from the user goal o
 File one candidate per root cause. When the same defect affects several controls or screens, file one candidate that lists every affected place in its steps and actual result.
 A defect with the same root cause as an issue in the existing catalog is that card's match, not a new candidate.
 Do not file pure visual preferences, or findings whose own evidence says the behavior may be intentional.
-Clipping or truncation seen only under the 200% text check is not a defect unless content becomes unreadable or a control becomes unusable.
+Clipping or truncation seen only under the 200% text-size check (`text-size-200`) is not a defect unless content becomes unreadable or a control becomes unusable.
 
 ## Independent validator
 
