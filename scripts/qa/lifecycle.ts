@@ -6,7 +6,6 @@ import * as Duplicates from "@qa/duplicates";
 import * as Project from "@qa/project";
 import * as Review from "@qa/review";
 import { z } from "zod";
-import * as Fix from "@/fix";
 import * as Protocol from "@/qa_protocol";
 
 export type Plan = {
@@ -28,64 +27,6 @@ export const result = (
   deployment: null,
 });
 export const deployed = Project.deployed;
-const resolveFix = async (
-  client: Client,
-  ticket: Protocol.Ticket,
-  project: Project.Project,
-): Promise<string | null> => {
-  if (!project.deployment?.repository) return ticket.fix;
-  const comments: string[] = await client.comments(ticket.id);
-  const link: Fix.Pull | null = Fix.pull(
-    ticket.description,
-    comments,
-    project.deployment.repository,
-  );
-  if (!link) {
-    const commit: string | null = Fix.commit(
-      ticket.description,
-      comments,
-      project.deployment.repository,
-    );
-    if (!commit) return ticket.fix;
-    await client.request(`/cards/${ticket.id}/fix`, "PUT", {
-      revision: commit,
-    });
-    return commit;
-  }
-  const child = Bun.spawn(
-    [
-      "gh",
-      "pr",
-      "view",
-      link.number,
-      "--repo",
-      link.repository,
-      "--json",
-      "state,mergeCommit",
-    ],
-    { stdout: "pipe", stderr: "pipe", timeout: Protocol.REQUEST_MS },
-  );
-  const [output, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    child.exited,
-  ]);
-  if (code !== 0) throw new Error("Cannot read the fix pull request");
-  const data: unknown = JSON.parse(output);
-  if (
-    !data ||
-    typeof data !== "object" ||
-    !("state" in data) ||
-    data.state !== "MERGED" ||
-    !("mergeCommit" in data) ||
-    !data.mergeCommit ||
-    typeof data.mergeCommit !== "object" ||
-    !("oid" in data.mergeCommit)
-  )
-    return null;
-  const revision: string = Protocol.revision.parse(data.mergeCommit.oid);
-  await client.request(`/cards/${ticket.id}/fix`, "PUT", { revision });
-  return revision;
-};
 export const plan = async (
   client: Client,
   run: Protocol.Run,
@@ -97,10 +38,8 @@ export const plan = async (
   );
   if (run.mode !== "verify")
     return { ticket: null, deployment: null, result: null };
-  for (const candidate of state.tickets) {
-    if (tickets && !tickets.includes(candidate.id)) continue;
-    const fix: string | null = await resolveFix(client, candidate, project);
-    const ticket: Protocol.Ticket = { ...candidate, fix };
+  for (const ticket of state.tickets) {
+    if (tickets && !tickets.includes(ticket.id)) continue;
     const claim = await client.request<{ accepted: boolean }>(
       `/runs/${run.id}/claim`,
       "POST",
@@ -111,16 +50,6 @@ export const plan = async (
       },
     );
     if (!claim.accepted) continue;
-    if (!fix)
-      return {
-        ticket,
-        deployment: null,
-        result: result(
-          "A merged fix PR or expected fix revision is missing.",
-          "blocked",
-          "partial",
-        ),
-      };
     if (!project.deployment)
       return {
         ticket,
@@ -145,29 +74,23 @@ export const plan = async (
         ),
       };
     }
-    if (revision !== fix)
-      return {
-        ticket,
-        deployment: null,
-        result: result(
-          "The deployed revision does not match the expected fix.",
-          "waiting",
-          "partial",
-        ),
-      };
     if (run.revision !== revision)
       return {
         ticket,
         deployment: null,
         result: result(
-          "The test image does not contain the deployed fix revision.",
+          "The test image does not contain the deployed revision.",
           "waiting",
           "partial",
         ),
       };
     return {
       ticket,
-      deployment: { expected: fix, deployed: revision, tested: run.revision },
+      deployment: {
+        expected: revision,
+        deployed: revision,
+        tested: run.revision,
+      },
       result: null,
     };
   }

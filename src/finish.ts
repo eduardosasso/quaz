@@ -10,6 +10,10 @@ const ARCHIVED: number = 3;
 const COMMENT_MAX: number = 4000;
 const MILLISECONDS: number = 1000;
 export const UNCAPPED: number = Number.POSITIVE_INFINITY;
+export const IMMEDIATE: number = 1;
+const CHECKED: readonly string[] = ["pass", "fail", "blocked"];
+const FAILED: string = "fail";
+const REOPENED: string = "reopened";
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const commentDigest = (value: string): string =>
@@ -297,12 +301,51 @@ const match = async (
     ? "Duplicate review is uncertain. Findings remain unpublished for review."
     : null;
 };
+const failures = (state: State.State, note: number, limit: number): number => {
+  const rows: { result: string }[] = state.db
+    .query<{ result: string }, [number, number]>(
+      "SELECT result FROM qa_checks WHERE note_id=? ORDER BY at DESC,rowid DESC LIMIT ?",
+    )
+    .all(note, limit);
+  const other: number = rows.findIndex((row): boolean => row.result !== FAILED);
+
+  return other < 0 ? rows.length : other;
+};
+const check = (
+  state: State.State,
+  note: number,
+  input: Protocol.Finish,
+  reopen: number,
+): boolean => {
+  const revision: string | undefined = input.deployment?.tested;
+  if (!revision || !CHECKED.includes(input.verdict)) return false;
+  state.db
+    .query(
+      "INSERT INTO qa_checks (note_id,revision,result,at) VALUES (?,?,?,?) ON CONFLICT(note_id,revision) DO UPDATE SET result=excluded.result,at=excluded.at",
+    )
+    .run(note, revision, input.verdict, Date.now());
+  if (input.verdict !== FAILED) return false;
+  const count: number = failures(state, note, reopen);
+  if (count >= reopen) return false;
+  console.log(
+    JSON.stringify({
+      event: "fix-pending",
+      card: note,
+      revision,
+      failures: count,
+      reopen,
+    }),
+  );
+
+  return true;
+};
 
 export const publish = async (
   state: State.State,
   id: string,
   input: Protocol.Finish,
   cap: number = UNCAPPED,
+  reopen: number = IMMEDIATE,
 ): Promise<Result> => {
   const run: ReturnType<State.State["run"]> = state.run(id);
   const receipt: string = digest(input);
@@ -387,18 +430,16 @@ export const publish = async (
     if (!refresh()) fail("Discovery publication lease expired");
   };
   if (run.mode === "verify" && ["pass", "fail"].includes(input.verdict)) {
-    const finding = run.target ? state.finding(run.target) : null;
     const proof = input.deployment;
     if (
       input.status !== "complete" ||
       !input.evidence.length ||
       !proof ||
-      proof.expected !== finding?.fix ||
       proof.deployed !== proof.expected ||
       proof.tested !== run.revision ||
       proof.tested !== proof.deployed
     )
-      fail("Verification needs completed tests of the deployed fix revision");
+      fail("Verification needs completed tests of the deployed revision");
   }
   state.db
     .query(
@@ -415,6 +456,7 @@ export const publish = async (
     const cards: number[] = [];
     const created: number[] = [];
     let status: string = held ? "partial" : input.status;
+    let reopened: number | null = null;
     if (run.mode === "verify" && input.verdict !== "none") {
       let target: Tracker.Card | null = run.target
         ? await state.tracker.get(run.target)
@@ -458,8 +500,10 @@ export const publish = async (
           owned &&
           !expired,
       );
+      const waiting: boolean =
+        valid && target ? check(state, target.id, input, reopen) : false;
       if (!valid) status = "superseded";
-      else if (target) {
+      else if (target && !waiting) {
         const targetId: number = target.id;
         const apply = async (
           action: string,
@@ -511,7 +555,7 @@ export const publish = async (
         const signature: string = digest({
           verdict: input.verdict,
           summary: input.summary,
-          fix: finding?.fix,
+          revision: proof?.tested,
         });
         if (input.verdict === "fail" || signature !== finding?.last_result) {
           const report: string = `QA ${input.verdict}\nRun: ${id}\n${proof ? `Deployed and tested revision: ${proof.tested}\n` : ""}${links(state, copied)}\n${input.summary}`;
@@ -534,6 +578,13 @@ export const publish = async (
               "UPDATE qa_findings SET verified_through=(SELECT rowid FROM qa_runs WHERE id=?),verified_at=? WHERE note_id=?",
             )
             .run(id, Date.now(), target.id);
+          console.log(
+            JSON.stringify({
+              event: "fix-verified",
+              card: targetId,
+              revision: proof?.tested,
+            }),
+          );
         }
         if (input.verdict === "fail") {
           await apply(
@@ -548,6 +599,7 @@ export const publish = async (
                 tagsRemove: Protocol.TAG.verified,
               }),
           );
+          reopened = targetId;
         }
         if (input.verdict === "blocked") {
           await apply(
@@ -855,7 +907,21 @@ export const publish = async (
         .run(run.project, id);
       state.db.query("DELETE FROM qa_pending_findings WHERE run=?").run(id);
       state.db.query("DELETE FROM qa_reopenings WHERE run=?").run(id);
+      if (reopened !== null)
+        state.db
+          .query("UPDATE qa_checks SET result=? WHERE note_id=? AND result=?")
+          .run(REOPENED, reopened, FAILED);
     })();
+    if (reopened !== null)
+      console.log(
+        JSON.stringify({
+          event: "fix-reopened",
+          card: reopened,
+          revision: input.deployment?.tested,
+          failures: reopen,
+          reopen,
+        }),
+      );
     if (skipped.length)
       console.log(
         JSON.stringify({

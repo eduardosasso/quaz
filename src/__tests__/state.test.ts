@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import CONFIG from "@qa/config.json";
+import * as Controller from "@qa/controller";
 import * as Finish from "@/finish";
 import * as Protocol from "@/qa_protocol";
 import * as State from "@/state";
@@ -152,6 +154,11 @@ const fixture = (
   };
 };
 const revision: string = "a".repeat(40);
+const fixed = (state: State.State, note: number): void => {
+  state.db
+    .query("UPDATE qa_findings SET fix=? WHERE note_id=?")
+    .run(revision, note);
+};
 const begin = (mode: Protocol.Mode): Protocol.Begin => ({
   id: `qa-${randomUUID()}`,
   project: "sample",
@@ -1328,7 +1335,7 @@ test("matched card becomes a tracked issue", async () => {
   };
   await Finish.publish(state, run.id, result);
   await state.tracker.complete(issue.id);
-  await state.fix(issue.id, revision);
+  fixed(state, issue.id);
 
   expect(
     (await state.state("sample")).tickets.map((ticket) => ticket.id),
@@ -1506,7 +1513,7 @@ test("same-run findings retain both fingerprints", async () => {
     [first.fingerprint]: first.test,
     [second.fingerprint]: second.test,
   });
-  await state.fix(published.created[0], revision);
+  fixed(state, published.created[0]);
 
   expect(rows().map((entry): string | null => entry.fix)).toEqual([
     revision,
@@ -1649,7 +1656,7 @@ test("discovery, fix and verification write no quaz-record attachment", async ()
   const published: Finish.Result = await publishIssue(state, run, proof);
   const issue: number = published.created[0];
   await state.tracker.complete(issue);
-  await state.fix(issue, revision);
+  fixed(state, issue);
   const verify: Protocol.Run = await state.begin(begin("verify"));
   state.ready(verify.id);
   await state.claim(verify.id, `ticket-${issue}`, "Save works", issue);
@@ -2219,7 +2226,7 @@ test("a fix link without a configured repository does not count", async () => {
 test("fix recorded after dismissal brings the card back", async () => {
   const { state, issue } = await tracked(COMPLETED);
   await state.state("sample");
-  await state.fix(issue.id, revision);
+  fixed(state, issue.id);
 
   expect(
     (await state.state("sample")).tickets.map((ticket) => ticket.id),
@@ -2421,4 +2428,174 @@ test("deleted card under a live verification run keeps its finding", async () =>
   await state.state("sample");
 
   expect(state.finding(issue.id)?.fix).toBe(revision);
+});
+
+const DEPLOYS: string[] = ["a", "b", "c", "d"].map((letter): string =>
+  letter.repeat(40),
+);
+const verify = async (
+  state: State.State,
+  issue: Tracker.Card,
+  deployed: string,
+  verdict: "pass" | "fail" | "blocked",
+): Promise<Finish.Result> => {
+  const run: Protocol.Run = await state.begin({
+    ...begin("verify"),
+    revision: deployed,
+  });
+  state.ready(run.id);
+  await state.claim(run.id, `ticket-${issue.id}`, "Saved", issue.id);
+  const proof: number = state.store(run.id, "proof.txt", PROOF, "text/plain");
+
+  return Finish.publish(
+    state,
+    run.id,
+    {
+      status: "complete",
+      summary: `Retest ${verdict}`,
+      report: {},
+      findings: [],
+      evidence: [proof],
+      verdict,
+      deployment: { expected: deployed, deployed, tested: deployed },
+    },
+    Finish.UNCAPPED,
+    CONFIG.controller.reopen,
+  );
+};
+const checks = (state: State.State): string[] =>
+  state.db
+    .query<{ revision: string; result: string }, []>(
+      "SELECT revision,result FROM qa_checks ORDER BY at,rowid",
+    )
+    .all()
+    .map((row): string => `${row.revision[0]}:${row.result}`);
+
+test("passing verify tags the card verified", async () => {
+  const logs = spyOn(console, "log").mockImplementation((): void => {});
+  try {
+    const { state, cards, issue } = await tracked(COMPLETED, { fix: revision });
+    const published: Finish.Result = await verify(
+      state,
+      issue,
+      DEPLOYS[0],
+      "pass",
+    );
+
+    expect(published.cards).toEqual([issue.id]);
+    expect(cards.get(issue.id)?.tags).toContain(Protocol.TAG.verified);
+    expect(cards.get(issue.id)?.tags).not.toContain(Protocol.TAG.pending);
+    expect(checks(state)).toEqual(["a:pass"]);
+    expect(events(logs, "fix-verified")).toEqual([
+      { event: "fix-verified", card: issue.id, revision: DEPLOYS[0] },
+    ]);
+  } finally {
+    logs.mockRestore();
+  }
+});
+
+test("failing verify waits without touching the card", async () => {
+  const logs = spyOn(console, "log").mockImplementation((): void => {});
+  try {
+    const { state, cards, comments, files, issue } = await tracked(COMPLETED, {
+      fix: revision,
+    });
+    const before: Tracker.Card | undefined = cards.get(issue.id);
+    const published: Finish.Result = await verify(
+      state,
+      issue,
+      DEPLOYS[0],
+      "fail",
+    );
+
+    expect(published.cards).toEqual([]);
+    expect(cards.get(issue.id)).toEqual(before);
+    expect(comments.get(issue.id)).toBeUndefined();
+    expect(files.size).toBe(0);
+    expect(checks(state)).toEqual(["a:fail"]);
+    expect(events(logs, "fix-pending")).toEqual([
+      {
+        event: "fix-pending",
+        card: issue.id,
+        revision: DEPLOYS[0],
+        failures: 1,
+        reopen: CONFIG.controller.reopen,
+      },
+    ]);
+    expect((await state.state("sample")).tickets[0].checked).toBe(DEPLOYS[0]);
+  } finally {
+    logs.mockRestore();
+  }
+});
+
+test("third failing deploy reopens the card", async () => {
+  const logs = spyOn(console, "log").mockImplementation((): void => {});
+  try {
+    const { state, cards, comments, issue } = await tracked(COMPLETED, {
+      fix: revision,
+    });
+    await verify(state, issue, DEPLOYS[0], "fail");
+    await verify(state, issue, DEPLOYS[1], "fail");
+    expect(cards.get(issue.id)?.status).toBe(COMPLETED);
+    expect(comments.get(issue.id)).toBeUndefined();
+
+    const published: Finish.Result = await verify(
+      state,
+      issue,
+      DEPLOYS[2],
+      "fail",
+    );
+
+    expect(published.cards).toEqual([issue.id]);
+    expect(cards.get(issue.id)?.status).toBe(ACTIVE);
+    expect(cards.get(issue.id)?.tags).toContain(Protocol.TAG.pending);
+    expect(comments.get(issue.id)?.at(-1)).toContain("QA fail");
+    expect(checks(state)).toEqual(["a:reopened", "b:reopened", "c:reopened"]);
+    expect(events(logs, "fix-reopened")).toEqual([
+      {
+        event: "fix-reopened",
+        card: issue.id,
+        revision: DEPLOYS[2],
+        failures: CONFIG.controller.reopen,
+        reopen: CONFIG.controller.reopen,
+      },
+    ]);
+
+    await state.tracker.complete(issue.id);
+    await verify(state, issue, DEPLOYS[3], "fail");
+
+    expect(cards.get(issue.id)?.status).toBe(COMPLETED);
+    expect(events(logs, "fix-pending").at(-1)).toMatchObject({ failures: 1 });
+  } finally {
+    logs.mockRestore();
+  }
+});
+
+test("a blocked retest breaks the failure streak", async () => {
+  const { state, cards, issue } = await tracked(COMPLETED, { fix: revision });
+  await verify(state, issue, DEPLOYS[0], "fail");
+  await verify(state, issue, DEPLOYS[1], "blocked");
+  await verify(state, issue, DEPLOYS[2], "fail");
+
+  expect(cards.get(issue.id)?.status).toBe(COMPLETED);
+  expect(checks(state)).toEqual(["a:fail", "b:blocked", "c:fail"]);
+});
+
+test("reproduced failure does not count as a run failure", async () => {
+  const { state, issue } = await tracked(COMPLETED, { fix: revision });
+  const history: Protocol.Run[] = [];
+  for (const deployed of DEPLOYS.slice(0, 2))
+    history.unshift((await verify(state, issue, deployed, "fail")).run);
+
+  expect(history.map((run): string => run.status)).toEqual([
+    "complete",
+    "complete",
+  ]);
+  expect(
+    Controller.available(
+      history,
+      Controller.schema.parse({ project: "sample", attempts: 2 }),
+      Date.now(),
+    ),
+  ).toBe(true);
 });

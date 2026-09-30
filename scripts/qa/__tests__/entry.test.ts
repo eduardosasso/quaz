@@ -85,9 +85,6 @@ test("controller recovery removes a stale Claude token", async () => {
       upload: async (): Promise<number> => {
         throw new Error("Unexpected recovery upload");
       },
-      comments: async (): Promise<string[]> => {
-        throw new Error("Unexpected recovery comments");
-      },
     };
     await Controller.recovery(client, root);
     expect(existsSync(credential)).toBe(false);

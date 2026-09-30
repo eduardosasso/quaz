@@ -44,7 +44,7 @@ const TICKET: Protocol.Ticket = {
     expected: "The changed title stays",
     scenario: "new-account",
   },
-  fix: REVISION,
+  checked: null,
 };
 const PROJECT: Project.Project = {
   id: "sample-app",
@@ -59,7 +59,6 @@ const PROJECT: Project.Project = {
   fetch: false,
 };
 const client = (tickets: Protocol.Ticket[] = [TICKET]): Client.Client => ({
-  comments: async (): Promise<string[]> => [],
   request: async <T>(path: string): Promise<T> => {
     if (path.startsWith("/state?"))
       return { tickets, runs: [], flows: [] } as T;
@@ -130,94 +129,11 @@ describe("QA orchestration boundaries", (): void => {
     expect(result.deployment).toBeNull();
   });
 
-  test("missing fix blocks acceptance tests", async (): Promise<void> => {
-    const result: Lifecycle.Plan = await Lifecycle.plan(
-      client([{ ...TICKET, fix: null }]),
-      RUN,
-      PROJECT,
-    );
-    expect(result.result?.verdict).toBe("blocked");
-    expect(result.deployment).toBeNull();
-  });
-
-  test("a newer fix PR replaces the previous failed revision", async (): Promise<void> => {
-    const binaries: string = join(directory, "bin");
-    await mkdir(binaries);
-    await writeFile(
-      join(binaries, "gh"),
-      `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ state: "MERGED", mergeCommit: { oid: NEXT_REVISION } })}'\n`,
-      { mode: 0o700 },
-    );
-    const child = Bun.spawn(["/bin/sh", join(binaries, "gh")], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const process = spyOn(Bun, "spawn").mockReturnValue(child);
-    const fixed: unknown[] = [];
-    const latest: Client.Client = {
-      ...client(),
-      comments: async (): Promise<string[]> => [
-        "New fix: https://github.com/example/app/pull/2",
-      ],
-      request: async <T>(
-        path: string,
-        _method?: string,
-        body?: unknown,
-      ): Promise<T> => {
-        if (path.endsWith("/fix")) {
-          fixed.push(body);
-          return body as T;
-        }
-        return await client().request<T>(path);
-      },
-    };
-    const transportRequest: typeof fetch = Object.assign(
-      async (): Promise<Response> => Response.json({ revision: NEXT_REVISION }),
-      { preconnect: globalThis.fetch.preconnect },
-    );
-    const transport = spyOn(globalThis, "fetch").mockImplementation(
-      transportRequest,
-    );
-    try {
-      const result: Lifecycle.Plan = await Lifecycle.plan(
-        latest,
-        { ...RUN, revision: NEXT_REVISION },
-        {
-          ...PROJECT,
-          deployment: {
-            url: "https://sample.example/version",
-            repository: "example/app",
-          },
-        },
-      );
-      expect(result.result).toBeNull();
-      expect(result.deployment?.expected).toBe(NEXT_REVISION);
-      expect(fixed).toEqual([{ revision: NEXT_REVISION }]);
-    } finally {
-      transport.mockRestore();
-      process.mockRestore();
-    }
-  });
-
-  test("a commit link resolves the fix without a pull request", async (): Promise<void> => {
+  test("verify never calls GitHub", async (): Promise<void> => {
     const process = spyOn(Bun, "spawn");
-    const fixed: unknown[] = [];
-    const latest: Client.Client = {
-      ...client([{ ...TICKET, fix: null }]),
-      comments: async (): Promise<string[]> => [
-        `Fixed directly: https://github.com/example/app/commit/${NEXT_REVISION}`,
-      ],
-      request: async <T>(
-        path: string,
-        _method?: string,
-        body?: unknown,
-      ): Promise<T> => {
-        if (path.endsWith("/fix")) {
-          fixed.push(body);
-          return body as T;
-        }
-        return await client([{ ...TICKET, fix: null }]).request<T>(path);
-      },
+    const linked: Protocol.Ticket = {
+      ...TICKET,
+      description: `Fixed: https://github.com/example/app/pull/2 and https://github.com/example/app/commit/${NEXT_REVISION}`,
     };
     const transportRequest: typeof fetch = Object.assign(
       async (): Promise<Response> => Response.json({ revision: NEXT_REVISION }),
@@ -228,7 +144,7 @@ describe("QA orchestration boundaries", (): void => {
     );
     try {
       const result: Lifecycle.Plan = await Lifecycle.plan(
-        latest,
+        client([linked]),
         { ...RUN, revision: NEXT_REVISION },
         {
           ...PROJECT,
@@ -239,8 +155,11 @@ describe("QA orchestration boundaries", (): void => {
         },
       );
       expect(result.result).toBeNull();
-      expect(result.deployment?.expected).toBe(NEXT_REVISION);
-      expect(fixed).toEqual([{ revision: NEXT_REVISION }]);
+      expect(result.deployment).toEqual({
+        expected: NEXT_REVISION,
+        deployed: NEXT_REVISION,
+        tested: NEXT_REVISION,
+      });
       expect(process).not.toHaveBeenCalled();
     } finally {
       transport.mockRestore();
@@ -363,7 +282,6 @@ describe("QA orchestration boundaries", (): void => {
     );
     const records: Protocol.Run[] = [];
     const tracking: Client.Client = {
-      comments: async (): Promise<string[]> => [],
       request: async <T>(
         path: string,
         _method?: string,
@@ -462,7 +380,6 @@ describe("QA orchestration boundaries", (): void => {
     await writeFile(project, JSON.stringify(PROJECT));
     const records: Protocol.Run[] = [];
     const tracking: Client.Client = {
-      comments: async (): Promise<string[]> => [],
       request: async <T>(
         path: string,
         _method?: string,

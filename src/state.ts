@@ -104,7 +104,6 @@ export type State = {
     goal: string,
     ticket?: number,
   ) => Promise<boolean>;
-  fix: (note: number, revision: string) => Promise<void>;
   finding: (note: number) => FindingRow | null;
 };
 
@@ -135,6 +134,10 @@ export const prepare = (db: Database): void => {
       verified_through INTEGER NOT NULL DEFAULT 0,
       verified_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project,fingerprint)
+    );
+    CREATE TABLE IF NOT EXISTS qa_checks (
+      note_id INTEGER NOT NULL, revision TEXT NOT NULL, result TEXT NOT NULL,
+      at INTEGER NOT NULL, PRIMARY KEY (note_id,revision)
     );
     CREATE TABLE IF NOT EXISTS qa_dismissed (
       project TEXT NOT NULL, note_id INTEGER PRIMARY KEY,
@@ -392,6 +395,7 @@ export const open = (
     if (held) return;
     const removed: number = db.transaction((): number => {
       db.query("DELETE FROM qa_dismissed WHERE note_id=?").run(note);
+      db.query("DELETE FROM qa_checks WHERE note_id=?").run(note);
 
       return db.query("DELETE FROM qa_findings WHERE note_id=?").run(note)
         .changes;
@@ -621,6 +625,12 @@ export const open = (
   };
   const count = async (project: string): Promise<number> =>
     opened(await tracker.list(), project);
+  const checked = (note: number): string | null =>
+    db
+      .query<{ revision: string }, [number]>(
+        "SELECT revision FROM qa_checks WHERE note_id=? ORDER BY at DESC,rowid DESC LIMIT 1",
+      )
+      .get(note)?.revision ?? null;
   const state = async (
     project: string,
     revision?: string,
@@ -666,7 +676,7 @@ export const open = (
             description: card.description,
             tags: card.tags,
             test: Protocol.caseSchema.parse(JSON.parse(row.test)),
-            fix: row.fix,
+            checked: checked(card.id),
           },
         ];
       },
@@ -751,19 +761,6 @@ export const open = (
       return changed.changes === 1;
     })();
   };
-  const fix = async (note: number, revision: string): Promise<void> => {
-    if (!(await tracker.get(note))) throw new Error("QA card not found");
-    const rows: { fix: string | null }[] = db
-      .query<{ fix: string | null }, [number]>(
-        "SELECT fix FROM qa_findings WHERE note_id=?",
-      )
-      .all(note);
-    if (!rows.length) throw new Error("QA card not found");
-    if (rows.every((row): boolean => row.fix === revision)) return;
-    db.query(
-      "UPDATE qa_findings SET fix=?,last_result=NULL WHERE note_id=?",
-    ).run(revision, note);
-  };
   const finding = (note: number): FindingRow | null =>
     db
       .query<FindingRow, [number]>(
@@ -785,7 +782,6 @@ export const open = (
     catalog,
     publication,
     claim,
-    fix,
     finding,
   };
 };

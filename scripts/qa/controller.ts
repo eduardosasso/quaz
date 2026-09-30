@@ -119,6 +119,7 @@ export const plans = (
     for (const ticket of state.tickets) {
       if (jobs.length >= free) break;
       if (active.some((job): boolean => job.ticket === ticket.id)) continue;
+      if (ticket.checked === revision) continue;
       if (
         state.flows.some(
           (flow): boolean =>

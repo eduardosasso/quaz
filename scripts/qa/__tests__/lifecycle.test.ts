@@ -53,7 +53,6 @@ test("raw Claude logs never become tracker artifacts", async () => {
 
       return uploaded.length;
     },
-    comments: async (): Promise<string[]> => [],
   };
   try {
     await Lifecycle.artifacts(client, "test-run", root);
