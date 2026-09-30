@@ -5,6 +5,7 @@ import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
 
 export type Runtime = {
+  container: string;
   image: string;
   revision: string;
   volume: string;
@@ -89,6 +90,7 @@ export const runtime = (value: unknown): Runtime => {
     .slice(0, 24);
 
   return {
+    container: self.Id,
     image: self.Image,
     revision: self.Config.Labels?.["app.qa.revision"] ?? "",
     volume: mount.Name,
@@ -97,15 +99,14 @@ export const runtime = (value: unknown): Runtime => {
     owner,
   };
 };
+export const reference = (): string | undefined =>
+  process.env.KAMAL_CONTAINER_NAME || process.env.HOSTNAME;
 export const inspect = async (): Promise<Runtime> => {
-  if (!process.env.HOSTNAME || !(await Bun.file("/.dockerenv").exists()))
-    throw new Error(
-      "Controller requires Docker; leave the container hostname at its default",
-    );
+  const self: string | undefined = reference();
+  if (!self || !(await Bun.file("/.dockerenv").exists()))
+    throw new Error("Controller requires Docker");
 
-  return runtime(
-    JSON.parse(await command(["inspect", process.env.HOSTNAME]))[0],
-  );
+  return runtime(JSON.parse(await command(["inspect", self]))[0]);
 };
 export const mount = (
   value: Runtime,
@@ -128,7 +129,9 @@ export const cleanup = async (value: Pick<Runtime, "owner">): Promise<void> => {
   ]);
   if (ids) await command(["rm", "-f", ...ids.split("\n")]);
 };
-export const network = async (value: Runtime): Promise<void> => {
+export const network = async (
+  value: Pick<Runtime, "container" | "network" | "owner">,
+): Promise<void> => {
   const existing: string = await command([
     "network",
     "ls",
@@ -156,10 +159,9 @@ export const network = async (value: Runtime): Promise<void> => {
       }),
     )
     .parse(attached);
-  const self: string = process.env.HOSTNAME ?? "";
   if (
-    !Object.keys(parsed[0].Containers ?? {}).some((id: string): boolean =>
-      id.startsWith(self),
+    !Object.keys(parsed[0].Containers ?? {}).some(
+      (id: string): boolean => id === value.container,
     )
   )
     await command([
@@ -168,7 +170,7 @@ export const network = async (value: Runtime): Promise<void> => {
       "--alias",
       "qa-controller",
       value.network,
-      self,
+      value.container,
     ]);
 };
 export const connected = (value: unknown): number => {
@@ -183,13 +185,10 @@ export const connected = (value: unknown): number => {
 
   return Object.keys(parsed[0].Containers ?? {}).length;
 };
-export const release = async (value: Runtime): Promise<void> => {
-  await command([
-    "network",
-    "disconnect",
-    value.network,
-    process.env.HOSTNAME ?? "",
-  ]);
+export const release = async (
+  value: Pick<Runtime, "container" | "network">,
+): Promise<void> => {
+  await command(["network", "disconnect", value.network, value.container]);
   const remaining: number = connected(
     JSON.parse(await command(["network", "inspect", value.network])),
   );
