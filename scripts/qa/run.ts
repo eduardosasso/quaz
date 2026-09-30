@@ -557,7 +557,7 @@ export const run = async (
           }
           return new Response("Not found", { status: 404 });
         } catch (error: unknown) {
-          console.log(
+          console.error(
             JSON.stringify({
               event: "coverage-error",
               run: authority.run.id,
