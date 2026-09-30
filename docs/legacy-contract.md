@@ -210,7 +210,7 @@ Use `revision: "git"` for deployed-fix verification. This requires a clean check
 The project must expose a version endpoint returning `{ "revision": "<full commit SHA>" }`.
 Configure it as `deployment.url`. The Overdew adapter's target provides `/api/version` from `KAMAL_VERSION`.
 The runner tests whatever revision the endpoint reports, and the test image must contain that revision.
-An absent, mismatched, or unreachable deployment leaves verification waiting.
+An absent deployment blocks verification; a mismatched or unreachable one leaves it waiting.
 A disposable replay of a deployed revision does not prove production configuration or external integrations.
 
 ## Evidence, recovery, and credentials
