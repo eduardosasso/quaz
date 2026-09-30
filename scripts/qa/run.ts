@@ -24,6 +24,8 @@ import * as Protocol from "@/qa_protocol";
 
 const ROOT: string = resolve(import.meta.dir, "../..");
 const MILLISECONDS: number = 1000;
+// Outlasts the worker's request timeout, so a slow bridge call ends in that timeout instead of a closed socket.
+const BRIDGE_IDLE_SECONDS: number = (2 * Protocol.REQUEST_MS) / MILLISECONDS;
 export type Options = {
   mode: Protocol.Mode;
   testers: number;
@@ -510,6 +512,7 @@ export const run = async (
       hostname: "0.0.0.0",
       port: 0,
       maxRequestBodySize: 4096,
+      idleTimeout: BRIDGE_IDLE_SECONDS,
       fetch: async (request: Request): Promise<Response> => {
         const authority = endpoints.get(
           request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "",
