@@ -1864,3 +1864,29 @@ test("verify ticket on an archived card is found by id", async () => {
     (await state.state("sample")).tickets.map((ticket) => ticket.id),
   ).toEqual([issue.id]);
 });
+
+test("state polls finding cards with bounded concurrency", async () => {
+  const { state } = fixture();
+  const reads: number = State.CARD_READS * 3;
+  for (let note: number = 1; note <= reads; note++)
+    state.db
+      .query(
+        "INSERT INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
+      )
+      .run("sample", `fingerprint-${note}`, note, "{}");
+  const get: Tracker.Tracker["get"] = state.tracker.get;
+  let flying: number = 0;
+  let peak: number = 0;
+  let total: number = 0;
+  state.tracker.get = async (id: number): Promise<Tracker.Card | null> => {
+    total++;
+    peak = Math.max(peak, ++flying);
+    await Bun.sleep(1);
+    flying--;
+
+    return await get(id);
+  };
+  await state.state("sample");
+  expect(total).toBe(reads);
+  expect(peak).toBe(State.CARD_READS);
+});

@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import * as Pool from "@/pool";
 import * as Protocol from "@/qa_protocol";
 import * as Record from "@/record";
 import * as State from "@/state";
@@ -43,7 +44,7 @@ export const records = async (
     managed,
   );
   const entries: Record.Record[] = (
-    await Promise.all(cards.map((card) => load(tracker, card)))
+    await Pool.map(cards, State.CARD_READS, (card) => load(tracker, card))
   ).filter((entry): entry is Record.Record => entry !== null);
   const labels: Map<number, Set<string>> = new Map(
     cards.map((card): [number, Set<string>] => [
