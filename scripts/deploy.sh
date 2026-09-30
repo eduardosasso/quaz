@@ -57,7 +57,7 @@ unset QUAZ_OP_SERVICE_ACCOUNT_TOKEN
 
 GITHUB_TOKEN="${QUAZ_REGISTRY_TOKEN:-}"
 if [ -z "$GITHUB_TOKEN" ]; then
-  GITHUB_TOKEN="$(op run --environment "$QUAZ_ENVIRONMENT" -- printenv QUAZ_REGISTRY_TOKEN)"
+  GITHUB_TOKEN="$(op run --no-masking --environment "$QUAZ_ENVIRONMENT" -- printenv QUAZ_REGISTRY_TOKEN)"
 fi
 if [ -z "$GITHUB_TOKEN" ]; then
   echo "Add QUAZ_REGISTRY_TOKEN to the Quaz 1Password Environment" >&2
@@ -71,4 +71,6 @@ bun --no-env-file run test
 if [ "$#" -eq 0 ]; then
   set -- deploy
 fi
+# Kamal skips the local registry login for remote builders, so the push would use a stale saved login.
+kamal registry login --skip-remote
 exec kamal "$@"
