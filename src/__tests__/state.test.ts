@@ -296,6 +296,23 @@ test("run card metadata retry reuses the created card", async () => {
   expect(cards.get(run.note_id)?.tags).toContain("qa-run");
 });
 
+test("interrupted run is persisted as interrupted", async () => {
+  const { state } = fixture();
+  const run: Protocol.Run = await state.begin(begin("smoke"));
+  const result: Protocol.Finish = {
+    status: Protocol.INTERRUPTED,
+    summary: "QA run interrupted",
+    report: { summary: "QA run interrupted" },
+    findings: [],
+    evidence: [],
+    verdict: "none",
+    deployment: null,
+  };
+  await Finish.publish(state, run.id, result);
+
+  expect(state.run(run.id).status).toBe(Protocol.INTERRUPTED);
+});
+
 test("finished run replay keeps its report", async () => {
   const { state, cards } = fixture();
   const input: Protocol.Begin = begin("smoke");

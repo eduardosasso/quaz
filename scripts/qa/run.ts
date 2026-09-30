@@ -24,6 +24,8 @@ import * as Protocol from "@/qa_protocol";
 
 const ROOT: string = resolve(import.meta.dir, "../..");
 const MILLISECONDS: number = 1000;
+// Outlasts the worker's request timeout, so a slow bridge call ends in that timeout instead of a closed socket.
+const BRIDGE_IDLE_SECONDS: number = (2 * Protocol.REQUEST_MS) / MILLISECONDS;
 export type Options = {
   mode: Protocol.Mode;
   testers: number;
@@ -143,6 +145,10 @@ const command = async (args: string[], cwd: string): Promise<string> => {
 export class Drift extends Error {
   override name: string = "Drift";
 }
+export class Interrupted extends Error {
+  override name: string = "Interrupted";
+}
+const INTERRUPTION: string = "QA run interrupted before completion";
 export const revision = async (
   project: Project.Project,
   request: (
@@ -317,6 +323,7 @@ const recoverySchema = z.object({
     .optional(),
   project: Project.schema.optional(),
   error: z.string().optional(),
+  interrupted: z.boolean().optional(),
 });
 export const recover = async (
   client: Client.Client,
@@ -357,9 +364,9 @@ export const recover = async (
     } else
       conclusion = {
         ...Lifecycle.result(
-          stored.error ?? "QA run interrupted before completion",
+          stored.error ?? INTERRUPTION,
           "none",
-          "failed",
+          stored.interrupted ? Protocol.INTERRUPTED : "failed",
         ),
         evidence: [...ids.values()],
       };
@@ -505,6 +512,7 @@ export const run = async (
       hostname: "0.0.0.0",
       port: 0,
       maxRequestBodySize: 4096,
+      idleTimeout: BRIDGE_IDLE_SECONDS,
       fetch: async (request: Request): Promise<Response> => {
         const authority = endpoints.get(
           request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "",
@@ -585,7 +593,8 @@ export const run = async (
     let cancelled: boolean = false;
     let build: Pick<Bun.Subprocess, "kill"> | undefined;
     const active = (): void => {
-      if (cancelled || signal?.aborted) throw new Error("QA run interrupted");
+      if (cancelled || signal?.aborted)
+        throw new Interrupted("QA run interrupted");
     };
     const interrupted = (): void => {
       cancelled = true;
@@ -657,7 +666,8 @@ export const run = async (
           JSON.stringify({
             isolated: true,
             run: began,
-            error: "QA run interrupted before completion",
+            error: INTERRUPTION,
+            interrupted: false,
           }),
         );
         attempts.push(directory);
@@ -695,7 +705,8 @@ export const run = async (
               JSON.stringify({
                 isolated: true,
                 run: began,
-                error: "QA run interrupted before completion",
+                error: INTERRUPTION,
+                interrupted: false,
               }),
             );
             let selection: Lifecycle.Plan = {
@@ -868,6 +879,7 @@ export const run = async (
                   isolated: true,
                   run: began,
                   error: String(error),
+                  interrupted: cancelled || signal?.aborted,
                 }),
               );
             } finally {
@@ -876,6 +888,8 @@ export const run = async (
             }
             conclusion = await recover(client, directory);
             if (!conclusion) throw new Error("QA run has no outcome");
+            if (conclusion.status === Protocol.INTERRUPTED)
+              throw new Interrupted(conclusion.summary);
             if (conclusion.status === "failed")
               throw new Error(conclusion.summary);
             await rm(directory, { recursive: true });
@@ -886,9 +900,17 @@ export const run = async (
       const failures = outcomes.filter(
         (outcome): boolean => outcome.status === "rejected",
       );
+      const reasons: unknown[] = failures.flatMap((outcome): unknown[] =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      if (
+        reasons.length &&
+        reasons.every((reason): boolean => reason instanceof Interrupted)
+      )
+        throw reasons[0];
       if (failures.length)
         throw new Error(
-          `${failures.length} QA run(s) failed: ${failures.flatMap((outcome): string[] => (outcome.status === "rejected" ? [String(outcome.reason)] : [])).join("; ")}. Temporary recovery files: ${scratch}`,
+          `${failures.length} QA run(s) failed: ${reasons.map(String).join("; ")}. Temporary recovery files: ${scratch}`,
         );
       success = true;
       console.log(
@@ -908,7 +930,11 @@ export const run = async (
           if (!stored.finish && !stored.report)
             await journal(
               directory,
-              JSON.stringify({ ...stored, error: String(error) }),
+              JSON.stringify({
+                ...stored,
+                error: String(error),
+                interrupted: cancelled || signal?.aborted,
+              }),
             );
           for (const name of ["build.log", "build-error.log"])
             if (existsSync(join(scratch, name)))

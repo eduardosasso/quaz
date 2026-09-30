@@ -152,6 +152,27 @@ describe("QA controller scheduling", (): void => {
       ),
     ).toHaveLength(2);
   });
+  test("interrupted run does not use the retry budget", (): void => {
+    const config: Controller.Settings = settings();
+    const history: Protocol.Run[] = Array.from(
+      { length: config.attempts + 1 },
+      (_, index): Protocol.Run =>
+        run(NOW - 301_000 * (index + 1), { status: Protocol.INTERRUPTED }),
+    );
+    expect(Controller.available(history, config, NOW)).toBe(true);
+    expect(
+      Controller.available(
+        [
+          run(NOW - 301_000, { status: Protocol.INTERRUPTED }),
+          ...history.map(
+            (item): Protocol.Run => ({ ...item, status: "failed" }),
+          ),
+        ].slice(0, config.attempts),
+        config,
+        NOW,
+      ),
+    ).toBe(true);
+  });
   test("scenarios rotate after the global history fills", (): void => {
     const input: Protocol.State = state({
       runs: Array.from(
@@ -645,6 +666,68 @@ describe("QA controller supervision", (): void => {
     );
     expect(names).not.toContain("run-error");
   });
+  test("shutdown interruption is not a failure", async (): Promise<void> => {
+    const stop = new AbortController();
+    const events: Record<string, unknown>[] = [];
+    let calls: number = 0;
+    let clock: number = NOW;
+    await Controller.loop(
+      settings({ parallel: 1, attempts: 2, retrySeconds: 1 }),
+      PROJECT,
+      REVISION,
+      stop.signal,
+      {
+        revision: async (): Promise<string> => REVISION,
+        state: async (): Promise<Protocol.State> => state(),
+        recover: async (): Promise<void> => {},
+        now: (): number => {
+          clock += 1_000_000;
+
+          return clock;
+        },
+        wait: async (): Promise<void> => {
+          await Bun.sleep(1);
+        },
+        log: (event: Record<string, unknown>): void => {
+          events.push(event);
+        },
+        execute: async (): Promise<void> => {
+          calls++;
+          if (calls >= 5) stop.abort();
+          throw new Runner.Interrupted("QA run interrupted");
+        },
+      },
+    );
+    const names: unknown[] = events.map((event): unknown => event.event);
+    expect(calls).toBe(5);
+    expect(names.filter((name): boolean => name === "run-stale")).toHaveLength(
+      5,
+    );
+    expect(names).not.toContain("run-error");
+  });
+  test("bounded runs stopped by shutdown do not halt", async (): Promise<void> => {
+    await expect(
+      Controller.loop(
+        settings({ parallel: 1, runs: 1, attempts: 3 }),
+        PROJECT,
+        REVISION,
+        new AbortController().signal,
+        {
+          revision: async (): Promise<string> => REVISION,
+          state: async (): Promise<Protocol.State> => state(),
+          recover: async (): Promise<void> => {},
+          now: (): number => NOW,
+          wait: async (): Promise<void> => {
+            await Bun.sleep(1);
+          },
+          log: (): void => {},
+          execute: async (): Promise<void> => {
+            throw new Runner.Interrupted("QA run interrupted");
+          },
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
   test("bounded runs stopped by a revision change do not halt", async (): Promise<void> => {
     await expect(
       Controller.loop(
@@ -769,6 +852,72 @@ describe("QA Docker boundary", (): void => {
           Mounts: [],
         }),
     ).toThrow("named volume");
+  });
+});
+
+describe("QA interrupted run recovery", (): void => {
+  let directory: string;
+  beforeAll(async (): Promise<void> => {
+    directory = await mkdtemp(join(tmpdir(), "qa-interrupted-"));
+  });
+  afterAll(async (): Promise<void> => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  test("interrupted journal finishes as interrupted and is cleared", async (): Promise<void> => {
+    const path: string = join(directory, "temporary-one", "run");
+    await mkdir(join(path, "output"), { recursive: true });
+    const original: Protocol.Run = run(NOW, {
+      status: "running",
+      receipt: null,
+    });
+    await Runner.journal(
+      path,
+      JSON.stringify({
+        isolated: true,
+        run: Protocol.begin.parse({
+          id: original.id,
+          project: original.project,
+          mode: original.mode,
+          revision: original.revision,
+          runner: { source: REVISION, image: `sha256:${"b".repeat(64)}` },
+          scenario: original.scenario,
+        }),
+        error: "QA run interrupted before completion",
+        interrupted: true,
+      }),
+    );
+    const finishes: Protocol.Finish[] = [];
+    const client: Client.Client = {
+      comments: async (): Promise<string[]> => [],
+      request: async <T>(
+        endpoint: string,
+        _method?: string,
+        body?: unknown,
+      ): Promise<T> => {
+        if (endpoint === "/runs") return original as T;
+        if (endpoint.endsWith("/finish")) {
+          finishes.push(body as Protocol.Finish);
+
+          return {
+            run: {
+              ...original,
+              receipt: "done",
+              status: Protocol.INTERRUPTED,
+            },
+          } as T;
+        }
+
+        return {} as T;
+      },
+      upload: async (): Promise<number> => {
+        throw new Error("No upload");
+      },
+    };
+    await Controller.recovery(client, directory);
+    expect(finishes.map((finish): string => finish.status)).toEqual([
+      Protocol.INTERRUPTED,
+    ]);
+    expect(existsSync(path)).toBe(false);
   });
 });
 

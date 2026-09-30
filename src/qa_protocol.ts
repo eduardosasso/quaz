@@ -11,6 +11,7 @@ export const MAX_BYTES: number = 5 * 1024 * 1024;
 export const REQUEST_MS: number = 30_000;
 export const LEASE_SECONDS: number = 3600;
 export const SCHEDULE_HISTORY: number = 10;
+export const INTERRUPTED = "interrupted";
 export const CATALOG_BYTES: number = 256 * 1024;
 export const PUBLICATION_SECONDS: number = 600;
 export const MATCHING_POLL_MS: number = 1000;
@@ -104,7 +105,7 @@ export const finding = z
 export type Finding = z.infer<typeof finding>;
 export const finish = z
   .object({
-    status: z.enum(["complete", "partial", "failed"]),
+    status: z.enum(["complete", "partial", "failed", INTERRUPTED]),
     summary: z.string().min(1).max(6000),
     report: z.record(z.string(), z.unknown()),
     findings: z.array(finding).max(10),
