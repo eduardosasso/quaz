@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import * as Protocol from "@/qa_protocol";
-import * as Record from "@/record";
 import type * as State from "@/state";
 import type * as Tracker from "@/tracker";
 
@@ -54,8 +54,11 @@ const attach = async (
   for (const id of ids) {
     guard?.();
     const source = state.db
-      .query<{ path: string; digest: string; mime: string }, [string, number]>(
-        "SELECT path,digest,mime FROM qa_artifacts WHERE run=? AND attachment=?",
+      .query<
+        { path: string; digest: string; mime: string; file: string | null },
+        [string, number]
+      >(
+        "SELECT path,digest,mime,file FROM qa_artifacts WHERE run=? AND attachment=?",
       )
       .get(run, id);
     if (!source) throw new Error("Evidence must belong to this QA run");
@@ -70,7 +73,9 @@ const attach = async (
       result.push(prior.id);
       continue;
     }
-    const bytes: Uint8Array = await state.tracker.download(id);
+    const bytes: Uint8Array = source.file
+      ? await readFile(state.artifact(source.file))
+      : await state.tracker.download(id);
     if (createHash("sha256").update(bytes).digest("hex") !== source.digest)
       fail("QA evidence changed after upload");
     let added: Tracker.Attachment;
@@ -97,12 +102,12 @@ const comment = async (
   state: State.State,
   note: number,
   body: string,
-  runCard: number,
+  run: string,
   apply?: (action: string, change: () => Promise<unknown>) => Promise<void>,
   guard?: () => void,
 ): Promise<void> => {
   guard?.();
-  const overflow: string = `\nFull report: QA run card ${runCard}.`;
+  const overflow: string = `\nFull report: Quaz run ${run}.`;
   const text: string =
     body.length > COMMENT_MAX
       ? `${body.slice(0, COMMENT_MAX - overflow.length)}${overflow}`
@@ -452,7 +457,7 @@ export const publish = async (
         });
         if (input.verdict === "fail" || signature !== finding?.last_result) {
           const report: string = `QA ${input.verdict}\nRun: ${id}\n${proof ? `Deployed and tested revision: ${proof.tested}\n` : ""}${links(state, copied)}\n${input.summary}`;
-          await comment(state, targetId, report, run.note_id, apply);
+          await comment(state, targetId, report, id, apply);
           state.db
             .query("UPDATE qa_findings SET last_result=? WHERE note_id=?")
             .run(signature, target.id);
@@ -495,23 +500,6 @@ export const publish = async (
               }),
           );
         }
-        if (finding)
-          await Record.save(
-            state.tracker,
-            targetId,
-            {
-              project: run.project,
-              fingerprint: finding.fingerprint,
-              test: Protocol.caseSchema.parse(JSON.parse(finding.test)),
-              fix: finding.fix,
-              lastResult: signature,
-            },
-            async (name: string, bytes: Uint8Array): Promise<void> => {
-              await apply(`attachment:${name}`, async (): Promise<void> => {
-                await state.tracker.upload(targetId, name, bytes, Record.MIME);
-              });
-            },
-          );
         cards.push(target.id);
       }
     }
@@ -644,15 +632,22 @@ export const publish = async (
             }
           }
           const report: string = `QA ${closed ? "reproduces this issue again" : "adds supporting evidence"}.\nRun: ${id}\n${links(state, copied)}\nTested revision: ${run.revision}\nActual: ${finding.actual}\nExpected: ${finding.test.expected}\nMatch: ${choice.reason}`;
-          await comment(state, target, report, run.note_id, undefined, renew);
+          await comment(state, target, report, id, undefined, renew);
           const recorded = state.finding(target);
-          await Record.save(state.tracker, target, {
-            project: run.project,
-            fingerprint: finding.fingerprint,
-            test: finding.test,
-            fix: recorded?.fix,
-            lastResult: recorded?.last_result,
-          });
+          state.db
+            .query(
+              `INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result)
+               VALUES (?,?,?,?,?,?) ON CONFLICT(project,fingerprint) DO UPDATE SET
+               note_id=excluded.note_id,test=excluded.test`,
+            )
+            .run(
+              run.project,
+              finding.fingerprint,
+              target,
+              JSON.stringify(finding.test),
+              recorded?.fix ?? null,
+              recorded?.last_result ?? null,
+            );
           destinations.set(finding.fingerprint, target);
           if (!cards.includes(target)) cards.push(target);
           continue;
@@ -699,11 +694,6 @@ export const publish = async (
         await state.tracker.update(noteId, {
           description: `${draft.description}\n\n${links(state, copied)}`,
         });
-        await Record.save(state.tracker, noteId, {
-          project: run.project,
-          fingerprint: finding.fingerprint,
-          test: finding.test,
-        });
         renew();
         state.db
           .query(
@@ -720,13 +710,6 @@ export const publish = async (
         created.push(noteId);
       }
     if (expired) status = "superseded";
-    await state.tracker.update(run.note_id, {
-      description: `Run ${id}\nProject: ${run.project}\nMode: ${run.mode}\nRevision: ${run.revision}\n${run.runner ? `Runner source: ${run.runner.source}\nRunner image: ${run.runner.image}\n` : ""}Status: ${status}\n\n${held ?? input.summary}\n\nReport:\n\n\`\`\`json\n${JSON.stringify({ ...input.report, ...(held ? { publication: { held, findings: input.findings, matching: input.matching } } : {}) }, null, 2)}\n\`\`\``,
-      ...(input.status === "failed" || held
-        ? { tagsAdd: Protocol.TAG.attention }
-        : {}),
-    });
-    await state.tracker.complete(run.note_id);
     const result: { cards: number[]; created: number[]; held?: string } = {
       cards,
       created,
@@ -735,9 +718,27 @@ export const publish = async (
     state.db.transaction((): void => {
       state.db
         .query(
-          "UPDATE qa_runs SET status=?,receipt=?,result=?,expires=0,publish=NULL,publish_lease=NULL WHERE id=?",
+          "UPDATE qa_runs SET status=?,receipt=?,result=?,report=?,expires=0,publish=NULL,publish_lease=NULL WHERE id=?",
         )
-        .run(status, receipt, JSON.stringify(result), id);
+        .run(
+          status,
+          receipt,
+          JSON.stringify(result),
+          JSON.stringify({
+            summary: input.summary,
+            report: input.report,
+            ...(held
+              ? {
+                  publication: {
+                    held,
+                    findings: input.findings,
+                    matching: input.matching,
+                  },
+                }
+              : {}),
+          }),
+          id,
+        );
       state.db
         .query("UPDATE qa_flows SET expires=0,status=? WHERE run=?")
         .run(status, id);
@@ -747,6 +748,16 @@ export const publish = async (
       state.db.query("DELETE FROM qa_pending_findings WHERE run=?").run(id);
       state.db.query("DELETE FROM qa_reopenings WHERE run=?").run(id);
     })();
+    console.log(
+      JSON.stringify({
+        event: "run-finished",
+        run: id,
+        status,
+        held: held ?? null,
+        cards: cards.length,
+        created: created.length,
+      }),
+    );
     return {
       run: state.run(id),
       cards,

@@ -24,6 +24,7 @@ test("imports board history without changing the legacy database", () => {
       INSERT INTO boards VALUES (7,'board-seven',1),(8,'board-eight',1);
       INSERT INTO attachments VALUES (20,'image/png');
       INSERT INTO qa_runs VALUES ('qa-old',7,11,'tester','sample','discover','${"a".repeat(40)}','empty',NULL,'complete',0,NULL,NULL,'receipt','request','{}',1);
+      INSERT INTO qa_runs VALUES ('qa-bare',7,NULL,'tester','sample','discover','${"a".repeat(40)}','empty',NULL,'complete',0,NULL,NULL,'receipt','request','{}',1);
       INSERT INTO qa_runs VALUES ('qa-other',8,12,'tester','sample','discover','${"a".repeat(40)}','empty',NULL,'complete',0,NULL,NULL,'receipt','request','{}',1);
       INSERT INTO qa_flows VALUES (7,'sample','save','Save works','qa-old',0,'complete');
       INSERT INTO qa_findings VALUES (7,'sample','${"b".repeat(64)}',13,'{}',NULL,NULL,1);
@@ -40,7 +41,7 @@ test("imports board history without changing the legacy database", () => {
         "https://tracker.example",
       ),
     ).toEqual({
-      runs: 1,
+      runs: 2,
       flows: 1,
       findings: 1,
       artifacts: 1,
@@ -48,8 +49,15 @@ test("imports board history without changing the legacy database", () => {
     });
     const target: Database = new Database(outputPath, { readonly: true });
     expect(
-      target.query<{ id: string }, []>("SELECT id FROM qa_runs").all(),
-    ).toEqual([{ id: "qa-old" }]);
+      target
+        .query<{ id: string; recorded: number }, []>(
+          "SELECT id,recorded FROM qa_runs ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { id: "qa-bare", recorded: 0 },
+      { id: "qa-old", recorded: 1 },
+    ]);
     expect(
       target.query<{ mime: string }, []>("SELECT mime FROM qa_artifacts").get(),
     ).toEqual({ mime: "image/png" });
@@ -84,7 +92,7 @@ test("imports board history without changing the legacy database", () => {
       unchanged
         .query<{ total: number }, []>("SELECT COUNT(*) AS total FROM qa_runs")
         .get()?.total,
-    ).toBe(2);
+    ).toBe(3);
     unchanged.close();
     expect(
       (): Legacy.Counts =>

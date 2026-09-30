@@ -1,17 +1,37 @@
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import * as Protocol from "@/qa_protocol";
-import * as Record from "@/record";
 import type * as Tracker from "@/tracker";
 
 const MILLISECONDS: number = 1000;
+const DAY_MILLISECONDS: number = 24 * 60 * 60 * MILLISECONDS;
+const FILE_MODE: number = 0o600;
+const DIRECTORY_MODE: number = 0o700;
+export const ARTIFACTS: string = "runs";
+const EVIDENCE_KEY: string = "evidence";
+const LIVE: readonly string[] = ["running", "publishing"];
+const RUN_COLUMNS: string =
+  "id,note_id,board_id,owner,project,mode,revision,scenario,attention,runner,status,expires,target,snapshot,receipt,request,result,started,publish,publish_lease,publish_held,publish_target_version,publish_target_step,recorded";
 const HISTORY_LIMIT: number = 100;
 const CLOSED: readonly number[] = [1, 3];
-const DELETED: number = 2;
+export const DELETED: number = 2;
 const ARCHIVED: number = 3;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const tags = (value: string): Set<string> =>
+export const tags = (value: string): Set<string> =>
   new Set(
     value
       .split(",")
@@ -34,7 +54,6 @@ type RunRow = Protocol.Run & {
   publish_held: string | null;
 };
 type RawRunRow = Omit<RunRow, "runner"> & { runner: string | null };
-type ExpiredRun = { id: string; note_id: number | null };
 type FindingRow = {
   project: string;
   fingerprint: string;
@@ -50,7 +69,10 @@ export type State = {
   tracker: Tracker.Tracker;
   run: (id: string) => RunRow;
   active: (id: string) => RunRow;
-  begin: (input: Protocol.Begin) => Promise<Protocol.Run>;
+  begin: (input: Protocol.Begin) => Protocol.Run;
+  artifact: (relative: string) => string;
+  store: (run: string, path: string, bytes: Uint8Array, mime: string) => number;
+  prune: (days: number) => string[];
   ready: (id: string) => Protocol.Run;
   state: (project: string, revision?: string) => Promise<Protocol.State>;
   catalog: (project: string) => Promise<Protocol.Catalog>;
@@ -66,7 +88,9 @@ export type State = {
 };
 
 export const prepare = (db: Database): void => {
-  db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000");
+  db.exec(
+    "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000",
+  );
   db.exec(`
     CREATE TABLE IF NOT EXISTS qa_runs (
       id TEXT PRIMARY KEY, note_id INTEGER, board_id INTEGER NOT NULL DEFAULT 0,
@@ -108,6 +132,9 @@ export const prepare = (db: Database): void => {
       run TEXT NOT NULL REFERENCES qa_runs(id), note_id INTEGER NOT NULL,
       PRIMARY KEY (run,note_id)
     );
+    CREATE TABLE IF NOT EXISTS qa_meta (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS qa_create_intents (
       run TEXT NOT NULL REFERENCES qa_runs(id), fingerprint TEXT NOT NULL,
       key TEXT NOT NULL, PRIMARY KEY (run,fingerprint)
@@ -136,21 +163,43 @@ export const prepare = (db: Database): void => {
       .all()
       .map((column): string => column.name),
   );
+  const artifactColumns: Set<string> = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(qa_artifacts)")
+      .all()
+      .map((column): string => column.name),
+  );
   if (!columns.has("publish_target_version"))
     db.exec("ALTER TABLE qa_runs ADD COLUMN publish_target_version INTEGER");
   if (!columns.has("publish_target_step"))
     db.exec("ALTER TABLE qa_runs ADD COLUMN publish_target_step TEXT");
   if (!columns.has("runner"))
     db.exec("ALTER TABLE qa_runs ADD COLUMN runner TEXT");
+  if (!columns.has("report"))
+    db.exec("ALTER TABLE qa_runs ADD COLUMN report TEXT");
+  if (!artifactColumns.has("file"))
+    db.exec("ALTER TABLE qa_artifacts ADD COLUMN file TEXT");
+  if (!columns.has("recorded"))
+    db.transaction((): void => {
+      db.exec(
+        "ALTER TABLE qa_runs ADD COLUMN recorded INTEGER NOT NULL DEFAULT 1",
+      );
+      db.exec("UPDATE qa_runs SET recorded=0 WHERE note_id IS NULL");
+    })();
 };
 
 export const open = (
   path: string | Database,
   tracker: Tracker.Tracker,
+  directory?: string,
 ): State => {
   const db: Database =
     typeof path === "string" ? new Database(path, { create: true }) : path;
   prepare(db);
+  const home: string = typeof path === "string" ? path : db.filename;
+  const root: string | null =
+    directory ??
+    (home && home !== ":memory:" ? join(dirname(home), ARTIFACTS) : null);
   const decode = (value: RawRunRow): RunRow => ({
     ...value,
     runner: value.runner
@@ -159,9 +208,11 @@ export const open = (
   });
   const run = (id: string): RunRow => {
     const value: RawRunRow | null = db
-      .query<RawRunRow, [string]>("SELECT * FROM qa_runs WHERE id=?")
+      .query<RawRunRow, [string]>(
+        `SELECT ${RUN_COLUMNS} FROM qa_runs WHERE id=?`,
+      )
       .get(id);
-    if (!value || value.note_id === null) throw new Error("QA run not found");
+    if (!value) throw new Error("QA run not found");
     return decode(value);
   };
   const active = (id: string): RunRow => {
@@ -170,7 +221,7 @@ export const open = (
       conflict("QA run is finished or expired");
     return value;
   };
-  const begin = async (input: Protocol.Begin): Promise<Protocol.Run> => {
+  const begin = (input: Protocol.Begin): Protocol.Run => {
     const request: string = digest(input);
     const prior = db
       .query<{ request: string }, [string]>(
@@ -193,30 +244,104 @@ export const open = (
         Date.now() + Protocol.LEASE_SECONDS * MILLISECONDS,
         request,
       );
-    const saved = db
-      .query<
-        { note_id: number | null; started: number | null; status: string },
-        [string]
-      >("SELECT note_id,started,status FROM qa_runs WHERE id=?")
-      .get(input.id);
-    let noteId: number | null = saved?.note_id ?? null;
-    if (!noteId) {
-      const card: Tracker.Card = await tracker.create(
-        `QA ${input.mode}: ${input.project}`,
-        `quaz-run-${digest(input.id)}`,
-      );
-      db.query(
-        "UPDATE qa_runs SET note_id=? WHERE id=? AND note_id IS NULL",
-      ).run(card.id, input.id);
-      noteId = card.id;
-    }
-    if (!saved?.started && saved?.status === "running")
-      await tracker.update(noteId, {
-        title: `QA ${input.mode}: ${input.project}`,
-        tags: `${Protocol.TAG.run},project:${input.project}`,
-        description: `Run ${input.id}\nMode: ${input.mode}\nProject: ${input.project}\nStatus: running\nRevision: ${input.revision}\nRunner source: ${input.runner.source}\nRunner image: ${input.runner.image}`,
-      });
+
     return run(input.id);
+  };
+  const artifact = (relative: string): string => {
+    if (!root) throw new Error("Quaz artifact directory is unavailable");
+    const target: string = resolve(root, relative);
+    if (
+      relative.split("/").includes("..") ||
+      !target.startsWith(`${resolve(root)}${sep}`)
+    )
+      throw new Error("Invalid QA artifact path");
+
+    return target;
+  };
+  const evidence = (): number => {
+    const saved = db
+      .query<{ value: string }, [string]>(
+        "SELECT value FROM qa_meta WHERE key=?",
+      )
+      .get(EVIDENCE_KEY);
+    const top = db
+      .query<{ top: number }, []>(
+        "SELECT COALESCE(MAX(attachment),0) AS top FROM qa_artifacts",
+      )
+      .get();
+    const next: number = Math.max(Number(saved?.value ?? 0), top?.top ?? 0) + 1;
+    db.query("INSERT OR REPLACE INTO qa_meta (key,value) VALUES (?,?)").run(
+      EVIDENCE_KEY,
+      String(next),
+    );
+
+    return next;
+  };
+  const store = (
+    id: string,
+    path: string,
+    bytes: Uint8Array,
+    mime: string,
+  ): number => {
+    const hash: string = createHash("sha256").update(bytes).digest("hex");
+    const prior = db
+      .query<
+        { digest: string; mime: string; attachment: number },
+        [string, string]
+      >(
+        "SELECT digest,mime,attachment FROM qa_artifacts WHERE run=? AND path=?",
+      )
+      .get(id, path);
+    if (prior) {
+      if (prior.digest !== hash || prior.mime !== mime)
+        throw new Error("Artifact path has different content");
+
+      return prior.attachment;
+    }
+    const file: string = `${id}/${path}`;
+    const target: string = artifact(file);
+    mkdirSync(dirname(target), { recursive: true, mode: DIRECTORY_MODE });
+    const temporary: string = `${target}.${randomUUID()}.tmp`;
+    const descriptor: number = openSync(temporary, "wx", FILE_MODE);
+    try {
+      writeFileSync(descriptor, bytes);
+      fsyncSync(descriptor);
+    } catch (error: unknown) {
+      rmSync(temporary, { force: true });
+      throw error;
+    } finally {
+      closeSync(descriptor);
+    }
+    renameSync(temporary, target);
+
+    return db.transaction((): number => {
+      const attachment: number = evidence();
+      db.query(
+        "INSERT INTO qa_artifacts (run,path,digest,mime,attachment,file) VALUES (?,?,?,?,?,?)",
+      ).run(id, path, hash, mime, attachment, file);
+
+      return attachment;
+    })();
+  };
+  const prune = (days: number): string[] => {
+    if (!root || !existsSync(root)) return [];
+    const cutoff: number = Date.now() - days * DAY_MILLISECONDS;
+    const pruned: string[] = [];
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const row = db
+        .query<{ status: string }, [string]>(
+          "SELECT status FROM qa_runs WHERE id=?",
+        )
+        .get(entry.name);
+      const directory: string = join(root, entry.name);
+      if (!row || LIVE.includes(row.status)) continue;
+      if (statSync(directory).mtimeMs > cutoff) continue;
+      rmSync(directory, { recursive: true, force: true });
+      pruned.push(entry.name);
+    }
+
+    return pruned;
   };
   const ready = (id: string): Protocol.Run =>
     db.transaction((): Protocol.Run => {
@@ -230,50 +355,8 @@ export const open = (
       ).run(Date.now(), Date.now() + Protocol.LEASE_SECONDS * MILLISECONDS, id);
       return run(id);
     })();
-  const records = async (
-    project: string,
-    cards: Tracker.Card[],
-  ): Promise<Map<number, Record.Record>> => {
-    const entries: (Record.Record | null)[] = await Promise.all(
-      cards.map(async (card): Promise<Record.Record | null> => {
-        const labels: Set<string> = tags(card.tags);
-        if (
-          card.status === DELETED ||
-          !labels.has(Protocol.TAG.issue) ||
-          !labels.has(`project:${project}`)
-        )
-          return null;
-
-        return Record.load(tracker, card.id);
-      }),
-    );
-    const found: Map<number, Record.Record> = new Map();
-    for (const entry of entries) {
-      if (!entry || entry.project !== project) continue;
-      found.set(entry.card, entry);
-      for (const finding of entry.findings) {
-        if (!finding.test) continue;
-        db.query(
-          `INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result)
-           VALUES (?,?,?,?,?,?) ON CONFLICT(project,fingerprint) DO UPDATE SET
-           note_id=excluded.note_id,test=excluded.test,fix=excluded.fix,
-           last_result=excluded.last_result`,
-        ).run(
-          project,
-          finding.fingerprint,
-          entry.card,
-          JSON.stringify(finding.test),
-          finding.fix,
-          finding.lastResult,
-        );
-      }
-    }
-
-    return found;
-  };
   const catalog = async (project: string): Promise<Protocol.Catalog> => {
     const cards: Tracker.Card[] = await tracker.list();
-    const saved: Map<number, Record.Record> = await records(project, cards);
     for (const intent of db
       .query<{ run: string; fingerprint: string; key: string }, []>(
         "SELECT run,fingerprint,key FROM qa_create_intents",
@@ -379,12 +462,7 @@ export const open = (
         tags: card.tags,
         status: card.status,
         comments: card.comments,
-        fingerprints:
-          saved
-            .get(card.id)
-            ?.findings.map((entry): string => entry.fingerprint) ??
-          known.get(card.id)?.fingerprints ??
-          [],
+        fingerprints: known.get(card.id)?.fingerprints ?? [],
       }));
     if (
       new TextEncoder().encode(JSON.stringify(selected)).byteLength >
@@ -397,24 +475,19 @@ export const open = (
     project: string,
     revision?: string,
   ): Promise<Protocol.State> => {
-    await records(project, await tracker.list());
     const now: number = Date.now();
-    const expired: ExpiredRun[] = db
-      .query<ExpiredRun, [string, number]>(
-        "SELECT id,note_id FROM qa_runs WHERE project=? AND status='running' AND expires<=?",
+    const expired: { id: string }[] = db
+      .query<{ id: string }, [string, number]>(
+        "SELECT id FROM qa_runs WHERE project=? AND status='running' AND expires<=?",
       )
       .all(project, now);
     for (const value of expired) {
       db.query(
         "UPDATE qa_runs SET status='expired' WHERE id=? AND status='running'",
       ).run(value.id);
-      if (value.note_id === null) continue;
-      const card: Tracker.Card | null = await tracker.get(value.note_id);
-      if (card)
-        await tracker.update(card.id, {
-          description: `${card.description}\n\nStatus: expired. The worker stopped reporting.`,
-          tagsAdd: Protocol.TAG.attention,
-        });
+      console.log(
+        JSON.stringify({ event: "run-expired", run: value.id, project }),
+      );
     }
     const rows: FindingRow[] = db
       .query<FindingRow, [string]>(
@@ -452,7 +525,7 @@ export const open = (
     );
     const runs: RunRow[] = db
       .query<RawRunRow, [string, number]>(
-        "SELECT * FROM qa_runs WHERE project=? AND note_id IS NOT NULL ORDER BY rowid DESC LIMIT ?",
+        `SELECT ${RUN_COLUMNS} FROM qa_runs WHERE project=? AND recorded=1 ORDER BY rowid DESC LIMIT ?`,
       )
       .all(project, HISTORY_LIMIT)
       .map(decode);
@@ -531,29 +604,13 @@ export const open = (
   };
   const fix = async (note: number, revision: string): Promise<void> => {
     if (!(await tracker.get(note))) throw new Error("QA card not found");
-    const rows = db
-      .query<
-        {
-          fix: string | null;
-          project: string;
-          fingerprint: string;
-          test: string;
-        },
-        [number]
-      >(
-        "SELECT fix,project,fingerprint,test FROM qa_findings WHERE note_id=? ORDER BY rowid",
+    const rows: { fix: string | null }[] = db
+      .query<{ fix: string | null }, [number]>(
+        "SELECT fix FROM qa_findings WHERE note_id=?",
       )
       .all(note);
     if (!rows.length) throw new Error("QA card not found");
     if (rows.every((row): boolean => row.fix === revision)) return;
-    for (const row of rows)
-      await Record.save(tracker, note, {
-        project: row.project,
-        fingerprint: row.fingerprint,
-        test: Protocol.caseSchema.parse(JSON.parse(row.test)),
-        fix: revision,
-        lastResult: null,
-      });
     db.query(
       "UPDATE qa_findings SET fix=?,last_result=NULL WHERE note_id=?",
     ).run(revision, note);
@@ -570,6 +627,9 @@ export const open = (
     run,
     active,
     begin,
+    artifact,
+    store,
+    prune,
     ready,
     state,
     catalog,

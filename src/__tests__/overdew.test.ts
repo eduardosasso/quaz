@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import * as Overdew from "@/adapters/overdew";
+import * as Tracker from "@/tracker";
 
 const previous: typeof fetch = globalThis.fetch;
 const previousError: typeof console.error = console.error;
@@ -472,5 +473,34 @@ test("board document lease and snapshot use the generic API", async () => {
     "PUT /api/boards/owner/board/documents/quaz-sample/lease",
     "PUT /api/boards/owner/board/documents/quaz-sample",
     "DELETE /api/boards/owner/board/documents/quaz-sample/lease",
+  ]);
+});
+
+test("listing can request every status", async () => {
+  const requested: (string | null)[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+    const url: string = String(input);
+    if (url.endsWith("/boards/destinations"))
+      return Response.json([{ id: 1, workspace: "owner", slug: "board" }]);
+    if (url.includes("/notes/search")) {
+      requested.push(new URL(url).searchParams.get("status"));
+
+      return Response.json({ notes: [], nextCursor: null });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  await tracker.list();
+  await tracker.list(Tracker.STATUSES);
+  await tracker.list(["completed"]);
+
+  expect(requested).toEqual([
+    "active,completed,archived",
+    "active,completed,archived",
+    "completed",
   ]);
 });

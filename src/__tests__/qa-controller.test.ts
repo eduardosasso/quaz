@@ -42,7 +42,7 @@ const run = (
   revision: REVISION,
   runner: null,
   scenario: "empty",
-  note_id: 1,
+  note_id: null,
   board_id: 1,
   owner: "tester",
   status: "complete",
