@@ -3,7 +3,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import * as Migrate from "@/migrate";
 import type * as Protocol from "@/qa_protocol";
 import * as State from "@/state";
-import type * as Tracker from "@/tracker";
+import * as Tracker from "@/tracker";
 
 const REVISION: string = "a".repeat(40);
 const FIRST: string = "b".repeat(64);
@@ -211,5 +211,14 @@ test("failed record import sets no marker", async () => {
 
   expect(marker(db)).not.toBeNull();
   expect(rows(db)).toHaveLength(2);
+  log.mockRestore();
+});
+
+test("record import still lists every status", async () => {
+  const { db, tracker, lists } = fixture();
+  const log = spyOn(console, "log").mockImplementation((): void => {});
+  await Migrate.records(db, tracker);
+
+  expect(lists).toEqual([[...Tracker.STATUSES]]);
   log.mockRestore();
 });

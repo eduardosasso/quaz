@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import * as Pool from "@/pool";
 import * as Protocol from "@/qa_protocol";
 import type * as Tracker from "@/tracker";
 
@@ -22,13 +23,13 @@ const FILE_MODE: number = 0o600;
 const DIRECTORY_MODE: number = 0o700;
 export const ARTIFACTS: string = "runs";
 const EVIDENCE_KEY: string = "evidence";
-const LIVE: readonly string[] = ["running", "publishing"];
+export const LIVE: readonly string[] = ["running", "publishing"];
 const RUN_COLUMNS: string =
   "id,note_id,board_id,owner,project,mode,revision,scenario,attention,runner,status,expires,target,snapshot,receipt,request,result,started,publish,publish_lease,publish_held,publish_target_version,publish_target_step,recorded";
 const HISTORY_LIMIT: number = 100;
+export const CARD_READS: number = 4;
 const CLOSED: readonly number[] = [1, 3];
 export const DELETED: number = 2;
-const ARCHIVED: number = 3;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const tags = (value: string): Set<string> =>
@@ -38,7 +39,7 @@ export const tags = (value: string): Set<string> =>
       .map((tag): string => tag.trim())
       .filter(Boolean),
   );
-const isRunCard = (card: Tracker.Card): boolean =>
+export const isRunCard = (card: Tracker.Card): boolean =>
   /^QA (smoke|discover|verify): [a-z0-9_-]+$/.test(card.title) &&
   /^Run qa-[a-zA-Z0-9_-]+\r?\n/.test(card.description);
 const conflict = (message: string): never => {
@@ -443,8 +444,6 @@ export const open = (
         );
         const managed = known.get(card.id);
         return (
-          card.status !== DELETED &&
-          card.status !== ARCHIVED &&
           !runs.has(card.id) &&
           !activePending.has(card.id) &&
           !labels.has(Protocol.TAG.run) &&
@@ -494,8 +493,10 @@ export const open = (
         "SELECT * FROM qa_findings WHERE project=? ORDER BY note_id",
       )
       .all(project);
-    const cards: (Tracker.Card | null)[] = await Promise.all(
-      rows.map((row): Promise<Tracker.Card | null> => tracker.get(row.note_id)),
+    const cards: (Tracker.Card | null)[] = await Pool.map(
+      rows,
+      CARD_READS,
+      (row): Promise<Tracker.Card | null> => tracker.get(row.note_id),
     );
     const seen: Set<number> = new Set();
     const tickets: Protocol.Ticket[] = rows.flatMap(
