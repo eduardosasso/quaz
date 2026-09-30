@@ -927,7 +927,11 @@ export const run = async (
           if (!stored.finish && !stored.report)
             await journal(
               directory,
-              JSON.stringify({ ...stored, error: String(error) }),
+              JSON.stringify({
+                ...stored,
+                error: String(error),
+                interrupted: cancelled || signal?.aborted,
+              }),
             );
           for (const name of ["build.log", "build-error.log"])
             if (existsSync(join(scratch, name)))

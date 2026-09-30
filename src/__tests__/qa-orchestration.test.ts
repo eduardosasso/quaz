@@ -461,10 +461,13 @@ describe("QA orchestration boundaries", (): void => {
       let recoverable: boolean = false;
       for (const name of await readdir(artifacts)) {
         const scratch: string = join(artifacts, name);
-        if (
-          await Bun.file(join(scratch, records[0].id, "recovery.json")).exists()
-        ) {
+        const recovery: string = join(scratch, records[0].id, "recovery.json");
+        if (await Bun.file(recovery).exists()) {
           recoverable = true;
+          const stored: { interrupted?: boolean } = JSON.parse(
+            await Bun.file(recovery).text(),
+          );
+          expect(stored.interrupted).toBeFalsy();
           await rm(scratch, { recursive: true, force: true });
         }
       }
