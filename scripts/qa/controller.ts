@@ -185,7 +185,7 @@ export const recovery = async (
         continue;
       try {
         const conclusion: Protocol.Finish = await Runner.recover(client, path);
-        if (conclusion.status === "complete")
+        if (["complete", Protocol.INTERRUPTED].includes(conclusion.status))
           await rm(path, { recursive: true });
         else pending = true;
       } catch (error: unknown) {
@@ -350,7 +350,10 @@ export const loop = async (
               retryAfter =
                 dependencies.now() +
                 settings.retrySeconds * Backoff.MILLISECONDS;
-              if (error instanceof Runner.Drift) {
+              if (
+                error instanceof Runner.Drift ||
+                error instanceof Runner.Interrupted
+              ) {
                 dependencies.log({
                   event: "run-stale",
                   ...job,
