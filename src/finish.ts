@@ -176,6 +176,27 @@ const issueCard = (
     },
   };
 };
+const closed = async (
+  state: State.State,
+  run: Protocol.Run,
+  fingerprint: string,
+): Promise<Tracker.Card | null> => {
+  const known = state.db
+    .query<{ note_id: number }, [string, string]>(
+      "SELECT note_id FROM qa_findings WHERE project=? AND fingerprint=?",
+    )
+    .get(run.project, fingerprint);
+  if (!known) return null;
+  const card: Tracker.Card | null = await state.tracker.get(known.note_id);
+  if (!card) return null;
+  const reopened: boolean = Boolean(
+    state.db
+      .query("SELECT 1 FROM qa_reopenings WHERE run=? AND note_id=?")
+      .get(run.id, card.id),
+  );
+
+  return [COMPLETED, ARCHIVED].includes(card.status) || reopened ? card : null;
+};
 const match = async (
   state: State.State,
   run: Protocol.Run,
@@ -203,6 +224,7 @@ const match = async (
   )
     fail("Duplicate review must cover each finding exactly once");
   const seen: Set<string> = new Set();
+  const reopening: Set<string> = new Set();
   let mismatch: boolean = false;
   for (const choice of plan.decisions) {
     if (!expected.has(choice.fingerprint) || seen.has(choice.fingerprint))
@@ -236,11 +258,19 @@ const match = async (
     );
     if (exact && (choice.verdict !== "existing" || choice.target !== exact.id))
       mismatch = true;
+    if (!exact && (await closed(state, run, choice.fingerprint))) {
+      if (["new", "uncertain"].includes(choice.verdict))
+        reopening.add(choice.fingerprint);
+      else mismatch = true;
+    }
     seen.add(choice.fingerprint);
   }
   if (mismatch)
     return "Duplicate review disagreed with an exact fingerprint match. Findings remain unpublished and require a fresh duplicate review.";
-  return plan.decisions.some((item): boolean => item.verdict === "uncertain")
+  return plan.decisions.some(
+    (item): boolean =>
+      item.verdict === "uncertain" && !reopening.has(item.fingerprint),
+  )
     ? "Duplicate review is uncertain. Findings remain unpublished for review."
     : null;
 };
@@ -518,10 +548,16 @@ export const publish = async (
           )
           .get(run.project, finding.test.flow, id, Date.now());
         if (!owned) fail("Discovery no longer owns its flow");
+        const revived: Tracker.Card | null = await closed(
+          state,
+          run,
+          finding.fingerprint,
+        );
         const target: number | undefined =
-          choice.verdict === "same-run"
+          revived?.id ??
+          (choice.verdict === "same-run"
             ? destinations.get(choice.sameAs ?? "")
-            : (choice.target ?? undefined);
+            : (choice.target ?? undefined));
         const staged = state.db
           .query<{ note_id: number }, [string, string]>(
             "SELECT note_id FROM qa_pending_findings WHERE run=? AND fingerprint=?",

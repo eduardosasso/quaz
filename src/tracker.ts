@@ -1,4 +1,5 @@
-export const STATUSES: readonly string[] = ["active", "completed", "archived"];
+export const ACTIVE: readonly string[] = ["active"];
+export const STATUSES: readonly string[] = [...ACTIVE, "completed", "archived"];
 
 export type Card = {
   id: number;

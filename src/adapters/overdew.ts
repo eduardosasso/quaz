@@ -280,7 +280,7 @@ export const connect = (
       leaseHeader = JSON.stringify({ key, owner, fence });
     },
     list: async (
-      statuses: readonly string[] = Tracker.STATUSES,
+      statuses: readonly string[] = Tracker.ACTIVE,
     ): Promise<Tracker.Card[]> => {
       const selected: number = await selectedBoard();
       const cards: Tracker.Card[] = [];

@@ -7,10 +7,15 @@ import { dirname, join } from "node:path";
 import * as Finish from "@/finish";
 import * as Protocol from "@/qa_protocol";
 import * as State from "@/state";
-import type * as Tracker from "@/tracker";
+import * as Tracker from "@/tracker";
 
 const folders: string[] = [];
 const MILLISECONDS: number = 1000;
+const STATUS_CODES: Record<string, number> = {
+  active: 0,
+  completed: 1,
+  archived: 3,
+};
 afterEach((): void => {
   for (const folder of folders.splice(0))
     rmSync(folder, { recursive: true, force: true });
@@ -40,7 +45,14 @@ const fixture = (): {
     comments: [...(comments.get(card.id) ?? [])],
   });
   const tracker: Tracker.Tracker = {
-    list: async (): Promise<Tracker.Card[]> => [...cards.values()].map(copy),
+    list: async (
+      statuses: readonly string[] = Tracker.ACTIVE,
+    ): Promise<Tracker.Card[]> =>
+      [...cards.values()]
+        .filter((card): boolean =>
+          statuses.some((name): boolean => STATUS_CODES[name] === card.status),
+        )
+        .map(copy),
     get: async (id: number): Promise<Tracker.Card | null> => {
       const card = cards.get(id);
       return card ? copy(card) : null;
@@ -500,7 +512,7 @@ const card = (
   comments: [],
 });
 
-test("catalog leaves out archived cards", async () => {
+test("catalog lists only active cards", async () => {
   const { state, cards } = fixture();
   cards.set(1, card(1, ACTIVE));
   cards.set(2, card(2, COMPLETED));
@@ -508,20 +520,21 @@ test("catalog leaves out archived cards", async () => {
 
   expect(
     (await state.catalog("sample")).cards.map((entry) => entry.id),
-  ).toEqual([1, 2]);
+  ).toEqual([1]);
 });
 
-test("catalog under the limit after archiving", async () => {
+test("catalog limit counts only active cards", async () => {
   const { state, cards } = fixture();
   const bulk: string = "x".repeat(Protocol.CATALOG_BYTES);
   cards.set(1, card(1, ACTIVE));
   cards.set(2, card(2, ARCHIVED, bulk));
+  cards.set(3, card(3, COMPLETED, bulk));
 
   expect(
     (await state.catalog("sample")).cards.map((entry) => entry.id),
   ).toEqual([1]);
 
-  cards.set(3, card(3, COMPLETED, bulk));
+  cards.set(4, card(4, ACTIVE, bulk));
 
   await expect(state.catalog("sample")).rejects.toThrow("review limit");
 });
@@ -820,8 +833,8 @@ test("reproduced card clears its old fix after an interrupted reopen", async () 
       decisions: [
         {
           fingerprint,
-          verdict: "existing",
-          target: issue.id,
+          verdict: "new",
+          target: null,
           sameAs: null,
           reason: "Same issue",
         },
@@ -1342,8 +1355,8 @@ test("older discovery cannot reopen a newly verified issue", async () => {
       decisions: [
         {
           fingerprint: found.fingerprint,
-          verdict: "existing",
-          target: issue.id,
+          verdict: "new",
+          target: null,
           sameAs: null,
           reason: "Same issue",
         },
@@ -1708,4 +1721,146 @@ test("old run artifacts are pruned", () => {
   expect(
     directories.map((entry): boolean => existsSync(entry.directory)),
   ).toEqual([false, true, true, true]);
+});
+
+const closedFixture = async (
+  status: number,
+): Promise<{
+  state: State.State;
+  cards: Map<number, Tracker.Card>;
+  comments: Map<number, string[]>;
+  lists: (readonly string[] | undefined)[];
+  issue: Tracker.Card;
+  run: Protocol.Run;
+  found: Protocol.Finding;
+  result: (catalog: Protocol.Catalog) => Protocol.Finish;
+}> => {
+  const { state, cards, comments } = fixture();
+  const created: Tracker.Card = await state.tracker.create(
+    "Broken save",
+    "issue",
+  );
+  const issue: Tracker.Card = await state.tracker.update(created.id, {
+    tags: "qa,verified,project:sample",
+  });
+  cards.set(issue.id, { ...issue, status });
+  const found: Protocol.Finding = { ...finding(0), evidence: [] };
+  state.db
+    .query(
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result) VALUES (?,?,?,?,?,?)",
+    )
+    .run(
+      "sample",
+      found.fingerprint,
+      issue.id,
+      JSON.stringify(found.test),
+      revision,
+      "old result",
+    );
+  const lists: (readonly string[] | undefined)[] = [];
+  const list: Tracker.Tracker["list"] = state.tracker.list;
+  state.tracker.list = async (
+    statuses?: readonly string[],
+  ): Promise<Tracker.Card[]> => {
+    lists.push(statuses);
+
+    return list(statuses);
+  };
+  const run: Protocol.Run = await state.begin(begin("discover"));
+  state.ready(run.id);
+  await state.claim(run.id, found.test.flow, "Save retains text");
+
+  return {
+    state,
+    cards,
+    comments,
+    lists,
+    issue,
+    run,
+    found,
+    result: (catalog: Protocol.Catalog): Protocol.Finish => ({
+      status: "complete",
+      summary: "Reproduced",
+      report: {},
+      findings: [found],
+      evidence: [],
+      verdict: "none",
+      deployment: null,
+      matching: {
+        snapshot: catalog.snapshot,
+        decisions: [
+          {
+            fingerprint: found.fingerprint,
+            verdict: "new",
+            target: null,
+            sameAs: null,
+            reason: "Looks new to the reviewer",
+          },
+        ],
+      },
+    }),
+  };
+};
+
+test("known fingerprint on a completed card reopens it without listing", async () => {
+  const { state, cards, comments, lists, issue, run, result } =
+    await closedFixture(COMPLETED);
+  const catalog: Protocol.Catalog | null = await state.publication(run.id);
+  if (!catalog) throw new Error("Publication lease missing");
+
+  expect(catalog.cards).toEqual([]);
+
+  const published = await Finish.publish(state, run.id, result(catalog));
+
+  expect(published.cards).toEqual([issue.id]);
+  expect(published.created).toEqual([]);
+  expect(cards.get(issue.id)?.status).toBe(ACTIVE);
+  expect(cards.get(issue.id)?.tags).toContain(Protocol.TAG.pending);
+  expect(cards.get(issue.id)?.tags).not.toContain(Protocol.TAG.verified);
+  expect(state.finding(issue.id)?.fix).toBeNull();
+  expect(comments.get(issue.id)?.at(-1)).toContain(
+    "reproduces this issue again",
+  );
+  expect(lists.every((statuses): boolean => statuses === undefined)).toBe(true);
+});
+
+test("known fingerprint on an archived card reopens it", async () => {
+  const { state, cards, issue, run, result } = await closedFixture(ARCHIVED);
+  const catalog: Protocol.Catalog | null = await state.publication(run.id);
+  if (!catalog) throw new Error("Publication lease missing");
+  const published = await Finish.publish(state, run.id, result(catalog));
+
+  expect(published.cards).toEqual([issue.id]);
+  expect(published.created).toEqual([]);
+  expect(cards.get(issue.id)?.status).toBe(ACTIVE);
+  expect(cards.get(issue.id)?.tags).toContain(Protocol.TAG.pending);
+});
+
+test("verify ticket on an archived card is found by id", async () => {
+  const { state, cards } = fixture();
+  const created: Tracker.Card = await state.tracker.create(
+    "Broken save",
+    "issue",
+  );
+  const issue: Tracker.Card = await state.tracker.update(created.id, {
+    tags: "qa,needs-verification,project:sample",
+  });
+  cards.set(issue.id, { ...issue, status: ARCHIVED });
+  const found: Protocol.Finding = finding(0);
+  state.db
+    .query(
+      "INSERT INTO qa_findings (project,fingerprint,note_id,test,fix) VALUES (?,?,?,?,?)",
+    )
+    .run(
+      "sample",
+      found.fingerprint,
+      issue.id,
+      JSON.stringify(found.test),
+      revision,
+    );
+
+  expect((await state.catalog("sample")).cards).toEqual([]);
+  expect(
+    (await state.state("sample")).tickets.map((ticket) => ticket.id),
+  ).toEqual([issue.id]);
 });

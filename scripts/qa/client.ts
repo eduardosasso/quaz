@@ -19,7 +19,7 @@ import * as Storage from "@/local_storage_native";
 import * as Migrate from "@/migrate";
 import * as Protocol from "@/qa_protocol";
 import * as State from "@/state";
-import type * as Tracker from "@/tracker";
+import * as Tracker from "@/tracker";
 
 const ROOT: string = resolve(import.meta.dir, "../..");
 const PATH = /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,220}$/;
@@ -187,7 +187,7 @@ const refuse = async (
   adapter: Tracker.Authority,
   project: string,
 ): Promise<void> => {
-  const cards: Tracker.Card[] = (await adapter.list()).filter(
+  const cards: Tracker.Card[] = (await adapter.list(Tracker.STATUSES)).filter(
     (card): boolean => {
       const labels: Set<string> = State.tags(card.tags);
 
