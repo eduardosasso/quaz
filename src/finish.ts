@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import * as Protocol from "@/qa_protocol";
-import * as Record from "@/record";
 import type * as State from "@/state";
 import type * as Tracker from "@/tracker";
 
@@ -501,23 +500,6 @@ export const publish = async (
               }),
           );
         }
-        if (finding)
-          await Record.save(
-            state.tracker,
-            targetId,
-            {
-              project: run.project,
-              fingerprint: finding.fingerprint,
-              test: Protocol.caseSchema.parse(JSON.parse(finding.test)),
-              fix: finding.fix,
-              lastResult: signature,
-            },
-            async (name: string, bytes: Uint8Array): Promise<void> => {
-              await apply(`attachment:${name}`, async (): Promise<void> => {
-                await state.tracker.upload(targetId, name, bytes, Record.MIME);
-              });
-            },
-          );
         cards.push(target.id);
       }
     }
@@ -652,13 +634,20 @@ export const publish = async (
           const report: string = `QA ${closed ? "reproduces this issue again" : "adds supporting evidence"}.\nRun: ${id}\n${links(state, copied)}\nTested revision: ${run.revision}\nActual: ${finding.actual}\nExpected: ${finding.test.expected}\nMatch: ${choice.reason}`;
           await comment(state, target, report, id, undefined, renew);
           const recorded = state.finding(target);
-          await Record.save(state.tracker, target, {
-            project: run.project,
-            fingerprint: finding.fingerprint,
-            test: finding.test,
-            fix: recorded?.fix,
-            lastResult: recorded?.last_result,
-          });
+          state.db
+            .query(
+              `INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result)
+               VALUES (?,?,?,?,?,?) ON CONFLICT(project,fingerprint) DO UPDATE SET
+               note_id=excluded.note_id,test=excluded.test`,
+            )
+            .run(
+              run.project,
+              finding.fingerprint,
+              target,
+              JSON.stringify(finding.test),
+              recorded?.fix ?? null,
+              recorded?.last_result ?? null,
+            );
           destinations.set(finding.fingerprint, target);
           if (!cards.includes(target)) cards.push(target);
           continue;
@@ -704,11 +693,6 @@ export const publish = async (
         renew();
         await state.tracker.update(noteId, {
           description: `${draft.description}\n\n${links(state, copied)}`,
-        });
-        await Record.save(state.tracker, noteId, {
-          project: run.project,
-          fingerprint: finding.fingerprint,
-          test: finding.test,
         });
         renew();
         state.db

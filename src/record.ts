@@ -1,10 +1,8 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
 import type * as Tracker from "@/tracker";
 
 const PREFIX: string = "quaz-record-";
-export const MIME: string = "application/json";
 const finding = z
   .object({
     fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
@@ -33,13 +31,6 @@ const legacy = z
   })
   .strict();
 export type Record = z.infer<typeof schema>;
-export type Changes = {
-  project: string;
-  fingerprint: string;
-  test?: Protocol.Case | null;
-  fix?: string | null;
-  lastResult?: string | null;
-};
 
 export const load = async (
   tracker: Tracker.Tracker,
@@ -76,48 +67,4 @@ export const load = async (
     throw new Error("Quaz record belongs to another card");
 
   return value;
-};
-
-export const save = async (
-  tracker: Tracker.Tracker,
-  card: number,
-  changes: Changes,
-  write?: (name: string, bytes: Uint8Array) => Promise<void>,
-): Promise<Record> => {
-  const prior: Record | null = await load(tracker, card);
-  if (prior && prior.project !== changes.project)
-    throw new Error("Quaz record belongs to another project");
-  const existing: z.infer<typeof finding> | undefined = prior?.findings.find(
-    (entry): boolean => entry.fingerprint === changes.fingerprint,
-  );
-  const updated: z.infer<typeof finding> = finding.parse({
-    fingerprint: changes.fingerprint,
-    test: changes.test === undefined ? (existing?.test ?? null) : changes.test,
-    fix: changes.fix === undefined ? (existing?.fix ?? null) : changes.fix,
-    lastResult:
-      changes.lastResult === undefined
-        ? (existing?.lastResult ?? null)
-        : changes.lastResult,
-  });
-  const next: Record = schema.parse({
-    version: 2,
-    card,
-    project: changes.project,
-    findings: [
-      ...(prior?.findings.filter(
-        (entry): boolean => entry.fingerprint !== changes.fingerprint,
-      ) ?? []),
-      updated,
-    ],
-  });
-  const bytes: Uint8Array = new TextEncoder().encode(JSON.stringify(next));
-  const hash: string = createHash("sha256").update(bytes).digest("hex");
-  const name: string = `${PREFIX}${hash}.json`;
-  const files: Tracker.Attachment[] = await tracker.attachments(card);
-  if (!files.some((entry): boolean => entry.name === name)) {
-    if (write) await write(name, bytes);
-    else await tracker.upload(card, name, bytes, MIME);
-  }
-
-  return next;
 };
