@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as Finish from "@/finish";
 import * as Protocol from "@/qa_protocol";
-import * as Record from "@/record";
 import * as State from "@/state";
 import type * as Tracker from "@/tracker";
 
@@ -161,6 +160,11 @@ const finding = (attachment: number): Protocol.Finding => ({
   },
   evidence: [attachment],
 });
+
+const recordFiles = (files: ReturnType<typeof fixture>["files"]): string[] =>
+  [...files.values()]
+    .map((file): string => file.name)
+    .filter((name): boolean => name.startsWith("quaz-record-"));
 
 test("migration timestamps previously verified findings", () => {
   const folder: string = mkdtempSync(join(tmpdir(), "quaz-migration-"));
@@ -977,7 +981,7 @@ test("verification recovers interrupted card changes", async () => {
   expect(comments.get(issue.id)?.at(-1)).toContain("QA fail");
   expect((await Finish.publish(state, run.id, result)).replayed).toBe(true);
   expect(comments.get(issue.id)).toHaveLength(1);
-  expect(cards.get(issue.id)?.version).toBe(issue.version + 5);
+  expect(cards.get(issue.id)?.version).toBe(issue.version + 4);
 
   await state.tracker.complete(issue.id);
   const passed: Protocol.Run = await state.begin(begin("verify"));
@@ -1215,7 +1219,7 @@ test("verification retry rejects a changed card", async () => {
 });
 
 test("matched card becomes a tracked issue", async () => {
-  const { state } = fixture();
+  const { state, files } = fixture();
   const created: Tracker.Card = await state.tracker.create(
     "Existing report",
     "existing",
@@ -1263,41 +1267,14 @@ test("matched card becomes a tracked issue", async () => {
   expect(
     (await state.state("sample")).tickets.map((ticket) => ticket.id),
   ).toEqual([issue.id]);
-});
-
-test("fresh database recovers a card test and fix from its files", async () => {
-  const { state } = fixture();
-  const created: Tracker.Card = await state.tracker.create(
-    "Broken save",
-    "issue",
-  );
-  const issue: Tracker.Card = await state.tracker.update(created.id, {
-    tags: "qa,needs-verification,project:sample",
-  });
-  await state.tracker.complete(issue.id);
-  const found: Protocol.Finding = finding(1);
-  await Record.save(state.tracker, issue.id, {
-    project: "sample",
-    fingerprint: found.fingerprint,
-    test: found.test,
-  });
-  const folder: string = mkdtempSync(join(tmpdir(), "quaz-recover-"));
-  folders.push(folder);
-  const recovered: State.State = State.open(
-    join(folder, "new.db"),
-    state.tracker,
-  );
-  expect((await recovered.catalog("sample")).cards[0].fingerprints).toEqual([
-    found.fingerprint,
-  ]);
-  expect((await recovered.state("sample")).tickets[0].test).toEqual(found.test);
-  await recovered.fix(issue.id, revision);
-  const again: State.State = State.open(
-    join(folder, "again.db"),
-    state.tracker,
-  );
-
-  expect((await again.state("sample")).tickets[0].fix).toBe(revision);
+  expect(
+    state.db
+      .query<{ note_id: number; test: string }, [string]>(
+        "SELECT note_id,test FROM qa_findings WHERE fingerprint=?",
+      )
+      .all(found.fingerprint),
+  ).toEqual([{ note_id: issue.id, test: JSON.stringify(found.test) }]);
+  expect(recordFiles(files)).toEqual([]);
 });
 
 test("older discovery cannot reopen a newly verified issue", async () => {
@@ -1439,21 +1416,22 @@ test("same-run findings retain both fingerprints", async () => {
     current.cards.find((card): boolean => card.id === published.created[0])
       ?.fingerprints,
   ).toEqual([first.fingerprint, second.fingerprint]);
-  const folder: string = mkdtempSync(join(tmpdir(), "quaz-same-run-"));
-  folders.push(folder);
-  const recovered: State.State = State.open(
-    join(folder, "new.db"),
-    state.tracker,
-  );
-  await recovered.catalog("sample");
-  const tests: { fingerprint: string; test: string }[] = recovered.db
-    .query<{ fingerprint: string; test: string }, [number]>(
-      "SELECT fingerprint,test FROM qa_findings WHERE note_id=?",
-    )
-    .all(published.created[0]);
+  const rows = (): {
+    fingerprint: string;
+    test: string;
+    fix: string | null;
+  }[] =>
+    state.db
+      .query<
+        { fingerprint: string; test: string; fix: string | null },
+        [number]
+      >(
+        "SELECT fingerprint,test,fix FROM qa_findings WHERE note_id=? ORDER BY rowid",
+      )
+      .all(published.created[0]);
   expect(
     Object.fromEntries(
-      tests.map((entry): [string, Protocol.Case] => [
+      rows().map((entry): [string, Protocol.Case] => [
         entry.fingerprint,
         JSON.parse(entry.test) as Protocol.Case,
       ]),
@@ -1462,60 +1440,12 @@ test("same-run findings retain both fingerprints", async () => {
     [first.fingerprint]: first.test,
     [second.fingerprint]: second.test,
   });
-  await recovered.fix(published.created[0], revision);
-  const again: State.State = State.open(
-    join(folder, "again.db"),
-    state.tracker,
-  );
-  await again.catalog("sample");
-  expect(
-    again.db
-      .query<{ fix: string | null }, [number]>(
-        "SELECT fix FROM qa_findings WHERE note_id=?",
-      )
-      .all(published.created[0])
-      .map((entry): string | null => entry.fix),
-  ).toEqual([revision, revision]);
-});
+  await state.fix(published.created[0], revision);
 
-test("legacy card record survives controller restart", async () => {
-  const { state } = fixture();
-  const created: Tracker.Card = await state.tracker.create(
-    "Legacy issue",
-    "legacy",
-  );
-  const issue: Tracker.Card = await state.tracker.update(created.id, {
-    tags: "qa,needs-verification,project:sample",
-  });
-  await state.tracker.complete(issue.id);
-  const found: Protocol.Finding = finding(1);
-  const bytes: Uint8Array = new TextEncoder().encode(
-    JSON.stringify({
-      version: 1,
-      card: issue.id,
-      project: "sample",
-      fingerprints: [found.fingerprint],
-      test: found.test,
-      fix: revision,
-      lastResult: null,
-    }),
-  );
-  await state.tracker.upload(
-    issue.id,
-    "quaz-record-legacy.json",
-    bytes,
-    Record.MIME,
-  );
-  const folder: string = mkdtempSync(join(tmpdir(), "quaz-legacy-"));
-  folders.push(folder);
-  const recovered: State.State = State.open(
-    join(folder, "new.db"),
-    state.tracker,
-  );
-
-  expect((await recovered.state("sample")).tickets[0]).toEqual(
-    expect.objectContaining({ test: found.test, fix: revision }),
-  );
+  expect(rows().map((entry): string | null => entry.fix)).toEqual([
+    revision,
+    revision,
+  ]);
 });
 
 test("deleted finding gets a replacement card", async () => {
@@ -1644,6 +1574,39 @@ test("discovery copies local evidence bytes to the finding card", async () => {
   expect(copied[0].owner).toBe(published.created[0]);
   expect(copied[0].bytes).toEqual(PROOF);
   expect(copied[0].name).toEndWith(".txt");
+});
+
+test("discovery, fix and verification write no quaz-record attachment", async () => {
+  const { state, files } = fixture();
+  const run: Protocol.Run = await state.begin(begin("discover"));
+  const proof: number = state.store(run.id, "proof.txt", PROOF, "text/plain");
+  const published: Finish.Result = await publishIssue(state, run, proof);
+  const issue: number = published.created[0];
+  await state.tracker.complete(issue);
+  await state.fix(issue, revision);
+  const verify: Protocol.Run = await state.begin(begin("verify"));
+  state.ready(verify.id);
+  await state.claim(verify.id, `ticket-${issue}`, "Save works", issue);
+  const verified: number = state.store(
+    verify.id,
+    "verify.txt",
+    PROOF,
+    "text/plain",
+  );
+  await Finish.publish(state, verify.id, {
+    status: "complete",
+    summary: "Save works",
+    report: {},
+    findings: [],
+    evidence: [verified],
+    verdict: "pass",
+    deployment: { expected: revision, deployed: revision, tested: revision },
+  });
+
+  expect(state.finding(issue)?.fix).toBe(revision);
+  expect(state.finding(issue)?.last_result).not.toBeNull();
+  expect(files.size).toBeGreaterThan(0);
+  expect(recordFiles(files)).toEqual([]);
 });
 
 test("legacy run-card evidence still copies after upgrade", async () => {

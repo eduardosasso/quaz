@@ -1,3 +1,5 @@
+export const STATUSES: readonly string[] = ["active", "completed", "archived"];
+
 export type Card = {
   id: number;
   version: number;
@@ -24,7 +26,7 @@ export type Changes = {
 };
 
 export type Tracker = {
-  list: () => Promise<Card[]>;
+  list: (statuses?: readonly string[]) => Promise<Card[]>;
   get: (id: number) => Promise<Card | null>;
   create: (title: string, key: string) => Promise<Card>;
   recover: (key: string) => Promise<Card | null>;

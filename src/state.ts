@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import * as Protocol from "@/qa_protocol";
-import * as Record from "@/record";
 import type * as Tracker from "@/tracker";
 
 const MILLISECONDS: number = 1000;
@@ -28,7 +27,7 @@ const RUN_COLUMNS: string =
   "id,note_id,board_id,owner,project,mode,revision,scenario,attention,runner,status,expires,target,snapshot,receipt,request,result,started,publish,publish_lease,publish_held,publish_target_version,publish_target_step,recorded";
 const HISTORY_LIMIT: number = 100;
 const CLOSED: readonly number[] = [1, 3];
-const DELETED: number = 2;
+export const DELETED: number = 2;
 const ARCHIVED: number = 3;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -356,50 +355,8 @@ export const open = (
       ).run(Date.now(), Date.now() + Protocol.LEASE_SECONDS * MILLISECONDS, id);
       return run(id);
     })();
-  const records = async (
-    project: string,
-    cards: Tracker.Card[],
-  ): Promise<Map<number, Record.Record>> => {
-    const entries: (Record.Record | null)[] = await Promise.all(
-      cards.map(async (card): Promise<Record.Record | null> => {
-        const labels: Set<string> = tags(card.tags);
-        if (
-          card.status === DELETED ||
-          !labels.has(Protocol.TAG.issue) ||
-          !labels.has(`project:${project}`)
-        )
-          return null;
-
-        return Record.load(tracker, card.id);
-      }),
-    );
-    const found: Map<number, Record.Record> = new Map();
-    for (const entry of entries) {
-      if (!entry || entry.project !== project) continue;
-      found.set(entry.card, entry);
-      for (const finding of entry.findings) {
-        if (!finding.test) continue;
-        db.query(
-          `INSERT INTO qa_findings (project,fingerprint,note_id,test,fix,last_result)
-           VALUES (?,?,?,?,?,?) ON CONFLICT(project,fingerprint) DO UPDATE SET
-           note_id=excluded.note_id,test=excluded.test,fix=excluded.fix,
-           last_result=excluded.last_result`,
-        ).run(
-          project,
-          finding.fingerprint,
-          entry.card,
-          JSON.stringify(finding.test),
-          finding.fix,
-          finding.lastResult,
-        );
-      }
-    }
-
-    return found;
-  };
   const catalog = async (project: string): Promise<Protocol.Catalog> => {
     const cards: Tracker.Card[] = await tracker.list();
-    const saved: Map<number, Record.Record> = await records(project, cards);
     for (const intent of db
       .query<{ run: string; fingerprint: string; key: string }, []>(
         "SELECT run,fingerprint,key FROM qa_create_intents",
@@ -505,12 +462,7 @@ export const open = (
         tags: card.tags,
         status: card.status,
         comments: card.comments,
-        fingerprints:
-          saved
-            .get(card.id)
-            ?.findings.map((entry): string => entry.fingerprint) ??
-          known.get(card.id)?.fingerprints ??
-          [],
+        fingerprints: known.get(card.id)?.fingerprints ?? [],
       }));
     if (
       new TextEncoder().encode(JSON.stringify(selected)).byteLength >
@@ -523,7 +475,6 @@ export const open = (
     project: string,
     revision?: string,
   ): Promise<Protocol.State> => {
-    await records(project, await tracker.list());
     const now: number = Date.now();
     const expired: { id: string }[] = db
       .query<{ id: string }, [string, number]>(
@@ -653,29 +604,13 @@ export const open = (
   };
   const fix = async (note: number, revision: string): Promise<void> => {
     if (!(await tracker.get(note))) throw new Error("QA card not found");
-    const rows = db
-      .query<
-        {
-          fix: string | null;
-          project: string;
-          fingerprint: string;
-          test: string;
-        },
-        [number]
-      >(
-        "SELECT fix,project,fingerprint,test FROM qa_findings WHERE note_id=? ORDER BY rowid",
+    const rows: { fix: string | null }[] = db
+      .query<{ fix: string | null }, [number]>(
+        "SELECT fix FROM qa_findings WHERE note_id=?",
       )
       .all(note);
     if (!rows.length) throw new Error("QA card not found");
     if (rows.every((row): boolean => row.fix === revision)) return;
-    for (const row of rows)
-      await Record.save(tracker, note, {
-        project: row.project,
-        fingerprint: row.fingerprint,
-        test: Protocol.caseSchema.parse(JSON.parse(row.test)),
-        fix: revision,
-        lastResult: null,
-      });
     db.query(
       "UPDATE qa_findings SET fix=?,last_result=NULL WHERE note_id=?",
     ).run(revision, note);

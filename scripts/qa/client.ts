@@ -16,6 +16,7 @@ import { z } from "zod";
 import * as Adapter from "@/adapters/overdew";
 import * as Finish from "@/finish";
 import * as Storage from "@/local_storage_native";
+import * as Migrate from "@/migrate";
 import * as Protocol from "@/qa_protocol";
 import * as State from "@/state";
 import type * as Tracker from "@/tracker";
@@ -297,6 +298,7 @@ export const open = async (
       join(dirname(file), State.ARTIFACTS),
     );
     destination(state.db, url, board);
+    await Migrate.records(state.db, adapter);
     let queue: Promise<void> = Promise.resolve();
     const exclusive = <T>(action: () => Promise<T>): Promise<T> => {
       const current: Promise<T> = queue.then(action);

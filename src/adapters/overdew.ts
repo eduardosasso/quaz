@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import * as ErrorName from "@/error";
-import type * as Tracker from "@/tracker";
+import * as Tracker from "@/tracker";
 
 const TIMEOUT_MS: number = 30_000;
 const PAGE_SIZE: number = 100;
@@ -279,7 +279,9 @@ export const connect = (
     bind: (key: string, owner: string, fence: number): void => {
       leaseHeader = JSON.stringify({ key, owner, fence });
     },
-    list: async (): Promise<Tracker.Card[]> => {
+    list: async (
+      statuses: readonly string[] = Tracker.STATUSES,
+    ): Promise<Tracker.Card[]> => {
       const selected: number = await selectedBoard();
       const cards: Tracker.Card[] = [];
       let after: number = 0;
@@ -292,7 +294,7 @@ export const connect = (
           .parse(
             await json(
               await request(
-                `/boards/${board}/notes/search?status=active,completed,archived&after=${after}&limit=${PAGE_SIZE}`,
+                `/boards/${board}/notes/search?status=${statuses.join(",")}&after=${after}&limit=${PAGE_SIZE}`,
               ),
             ),
           );
