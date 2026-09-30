@@ -12,7 +12,9 @@ const LIMIT: number = 500;
 const TIMEOUT: number = 15_000;
 const DETECTOR_BYTES: number = 8 * 1024 * 1024;
 const FONT_WAIT_MS: number = 2000;
-const TEXT_SCALE: number = 2;
+export const TEXT_SCALE: number = 2;
+const ROOT_TOLERANCE: number = 0.1;
+export const TEXT_SIZE: string = "text-size-200";
 export const VIEWPORTS = {
   narrow: { width: 320, height: 844 },
   mobile: { width: 390, height: 844 },
@@ -24,7 +26,7 @@ export const CONDITIONS: string[] = [
   "light",
   "dark",
   "reduced-motion",
-  "text-200-percent",
+  TEXT_SIZE,
 ];
 const dimensionsSchema = z.object({
   width: z.number().positive(),
@@ -46,6 +48,7 @@ const measurementSchema = z
       reduced: z.boolean(),
       landscape: z.boolean(),
     }),
+    rootSize: z.number().positive(),
     fonts: z.enum(["loaded", "loading"]),
     background: z.string(),
     performance: z.object({
@@ -79,7 +82,6 @@ const measurementSchema = z
             contrast: z.number().min(1).max(21.1).nullable(),
             clipped: z.boolean(),
             size: z.string(),
-            originalSize: z.number().nonnegative().nullable(),
             font: z.string(),
           })
           .passthrough(),
@@ -150,19 +152,18 @@ export const bindingSchema = z
           message: `Measurement does not match its surface or viewport: ${entry.condition}`,
         });
       if (
-        entry.condition === "text-200-percent" &&
-        entry.data.elements.some(
-          (element): boolean =>
-            element.originalSize === null ||
-            Math.abs(
-              Number.parseFloat(element.size) -
-                element.originalSize * TEXT_SCALE,
-            ) > 0.1,
-        )
+        entry.condition === TEXT_SIZE &&
+        Math.abs(
+          entry.data.rootSize -
+            (value.measurements.find(
+              (baseline): boolean => baseline.condition === "mobile",
+            )?.data.rootSize ?? 0) *
+              TEXT_SCALE,
+        ) > ROOT_TOLERANCE
       )
         context.addIssue({
           code: "custom",
-          message: "Text did not scale to 200 percent",
+          message: "Root font size did not scale to 200 percent",
         });
       if (entry.condition === "landscape" && !entry.data.media.landscape)
         context.addIssue({
@@ -223,15 +224,7 @@ export const measure = async (
   }, FONT_WAIT_MS);
   return measurementSchema.parse(
     await page.evaluate(
-      ({
-        limit,
-        selector,
-        scale,
-      }: {
-        limit: number;
-        selector: string;
-        scale: number;
-      }) => {
+      ({ limit, selector }: { limit: number; selector: string }) => {
         const roots: HTMLElement[] = Array.from(
           document.querySelectorAll<HTMLElement>(selector),
         ).filter(
@@ -330,6 +323,9 @@ export const measure = async (
             width: document.documentElement.scrollWidth,
             height: document.documentElement.scrollHeight,
           },
+          rootSize: parseFloat(
+            getComputedStyle(document.documentElement).fontSize,
+          ),
           fonts: document.fonts.status,
           theme: document.documentElement.className,
           background: getComputedStyle(document.body).backgroundColor,
@@ -403,9 +399,6 @@ export const measure = async (
               },
               font: style.fontFamily,
               size: style.fontSize,
-              originalSize: element.dataset.qaSize
-                ? Number.parseFloat(element.dataset.qaSize) / scale
-                : null,
               weight: style.fontWeight,
               lineHeight: style.lineHeight,
               color: style.color,
@@ -427,10 +420,12 @@ export const measure = async (
           }),
         };
       },
-      { limit: LIMIT, selector, scale: TEXT_SCALE },
+      { limit: LIMIT, selector },
     ),
   );
 };
+
+type RootFont = { value: string; priority: string };
 
 export const capture = async (
   page: Page,
@@ -454,6 +449,7 @@ export const capture = async (
     reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
   }));
   const errors: string[] = [];
+  let rootFont: RootFont | null = null;
   const failure = (error: Error): void => {
     errors.push(error.message);
   };
@@ -477,7 +473,7 @@ export const capture = async (
       data: await measure(page, selector),
     });
     // Measure the enlarged layout instead of an intermediate transition frame.
-    await page.evaluate((scale: number): void => {
+    await page.evaluate((): void => {
       for (const element of document.querySelectorAll<HTMLElement>("*")) {
         element.dataset.qaTransition = element.style.getPropertyValue(
           "transition-property",
@@ -486,42 +482,35 @@ export const capture = async (
           element.style.getPropertyPriority("transition-property");
         element.style.setProperty("transition-property", "none", "important");
       }
-      for (const element of document.querySelectorAll<HTMLElement>("*")) {
-        const size: number = parseFloat(getComputedStyle(element).fontSize);
-        element.dataset.qaOriginalSize =
-          element.style.getPropertyValue("font-size");
-        element.dataset.qaOriginalPriority =
-          element.style.getPropertyPriority("font-size");
-        element.dataset.qaSize = `${size * scale}px`;
-      }
-      for (const element of document.querySelectorAll<HTMLElement>(
-        "[data-qa-size]",
-      ))
-        element.style.setProperty(
-          "font-size",
-          element.dataset.qaSize ?? "",
-          "important",
-        );
+    });
+    // Browser and OS text settings scale the root size; rem and em text follows.
+    rootFont = await page.evaluate((scale: number): RootFont => {
+      const root: HTMLElement = document.documentElement;
+      const original: RootFont = {
+        value: root.style.getPropertyValue("font-size"),
+        priority: root.style.getPropertyPriority("font-size"),
+      };
+      root.style.setProperty(
+        "font-size",
+        `${parseFloat(getComputedStyle(root).fontSize) * scale}px`,
+        "important",
+      );
+
+      return original;
     }, TEXT_SCALE);
     measurements.push({
-      condition: "text-200-percent",
+      condition: TEXT_SIZE,
       data: await measure(page, selector),
     });
     return { measurements, errors };
   } finally {
-    await page.evaluate((): void => {
-      for (const element of document.querySelectorAll<HTMLElement>(
-        "[data-qa-size]",
-      )) {
-        element.style.setProperty(
+    await page.evaluate((original: RootFont | null): void => {
+      if (original)
+        document.documentElement.style.setProperty(
           "font-size",
-          element.dataset.qaOriginalSize ?? "",
-          element.dataset.qaOriginalPriority ?? "",
+          original.value,
+          original.priority,
         );
-        delete element.dataset.qaSize;
-        delete element.dataset.qaOriginalSize;
-        delete element.dataset.qaOriginalPriority;
-      }
       // Restore sizes before transitions so cleanup does not animate the page.
       document.documentElement.getBoundingClientRect();
       for (const element of document.querySelectorAll<HTMLElement>(
@@ -535,7 +524,7 @@ export const capture = async (
         delete element.dataset.qaTransition;
         delete element.dataset.qaTransitionPriority;
       }
-    });
+    }, rootFont);
     await page.setViewportSize(viewport);
     await page.emulateMedia({
       colorScheme: original.dark ? "dark" : "light",

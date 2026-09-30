@@ -205,6 +205,7 @@ beforeEach(async (): Promise<void> => {
             reduced: condition === "reduced-motion",
             landscape: condition === "landscape",
           },
+          rootSize: condition === Inspect.TEXT_SIZE ? 32 : 16,
           fonts: "loaded",
           background: "white",
           performance: {
@@ -219,8 +220,7 @@ beforeEach(async (): Promise<void> => {
               rect: { x: 0, y: 0, width: 390, height: 100 },
               contrast: 21,
               clipped: false,
-              size: condition === "text-200-percent" ? "32px" : "16px",
-              originalSize: condition === "text-200-percent" ? 16 : null,
+              size: "16px",
               font: "sans-serif",
             },
           ],

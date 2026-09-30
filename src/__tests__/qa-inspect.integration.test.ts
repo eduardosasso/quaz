@@ -28,6 +28,7 @@ const BROWSER_TEST: boolean =
 const OUTSIDE_CONTROLS: number = 90;
 const MOBILE_SCALE: number = 3;
 const OVERFLOW_WIDTH: number = 600;
+const FIXED_SIZE: number = 14;
 const DOCKER_OUTPUT: string = "/output";
 const DOCKER_SOURCE: string =
   "/app/src/__tests__/qa-inspect.integration.test.ts";
@@ -75,6 +76,10 @@ const HTML: string = `<!doctype html>
       <p style="color:black;opacity:.1">Faded text</p>
       <div style="opacity:.5"><p>Faded ancestor</p></div>
       <div style="background-image:linear-gradient(black,black)"><p style="color:white">Gradient text</p></div>
+    </section>
+    <section id="sizing">
+      <p id="rem" style="font-size:1.5rem">Relative text</p>
+      <p id="fixed" style="font-size:14px">Fixed text</p>
     </section>
   </main>
 </body>
@@ -158,9 +163,7 @@ describe.skipIf(!BROWSER_TEST)("QA browser inspection", (): void => {
     ).toBe(originalStyle);
     expect(
       await page
-        .locator(
-          "[data-qa-size],[data-qa-original-size],[data-qa-original-priority]",
-        )
+        .locator("[data-qa-transition],[data-qa-transition-priority]")
         .count(),
     ).toBe(0);
     await page.getByRole("button", { name: "Save", exact: true }).tap();
@@ -196,16 +199,14 @@ describe.skipIf(!BROWSER_TEST)("QA browser inspection", (): void => {
     );
     const capture = await Inspect.capture(page, "#editor");
     const enlarged = capture.measurements.find(
-      (entry): boolean => entry.condition === "text-200-percent",
+      (entry): boolean => entry.condition === Inspect.TEXT_SIZE,
     );
-    expect(enlarged).toBeDefined();
-    for (const element of enlarged?.data.elements ?? [])
-      expect(Number.parseFloat(element.size)).toBeCloseTo(
-        (element.originalSize ?? 0) * 2,
-        1,
-      );
     const before = capture.measurements.find(
       (entry): boolean => entry.condition === "mobile",
+    );
+    expect(enlarged?.data.rootSize).toBeCloseTo(
+      (before?.data.rootSize ?? 0) * Inspect.TEXT_SCALE,
+      1,
     );
     expect(
       before?.data.elements.find((element): boolean => element.tag === "INPUT")
@@ -231,6 +232,76 @@ describe.skipIf(!BROWSER_TEST)("QA browser inspection", (): void => {
         .locator("[data-qa-transition],[data-qa-transition-priority]")
         .count(),
     ).toBe(0);
+  });
+
+  const sizes = async (): Promise<{
+    mobile: Map<string, number>;
+    enlarged: Map<string, number>;
+    root: { mobile: number; enlarged: number };
+  }> => {
+    const capture = await Inspect.capture(page, "#sizing");
+    const measured = (condition: string) => {
+      const data = capture.measurements.find(
+        (entry): boolean => entry.condition === condition,
+      )?.data;
+      if (!data) throw new Error(`Missing measurement: ${condition}`);
+
+      return data;
+    };
+    const table = (condition: string): Map<string, number> =>
+      new Map(
+        measured(condition).elements.map((element): [string, number] => [
+          element.text,
+          Number.parseFloat(element.size),
+        ]),
+      );
+
+    return {
+      mobile: table("mobile"),
+      enlarged: table(Inspect.TEXT_SIZE),
+      root: {
+        mobile: measured("mobile").rootSize,
+        enlarged: measured(Inspect.TEXT_SIZE).rootSize,
+      },
+    };
+  };
+
+  test("text size scales the root font size only", async (): Promise<void> => {
+    const result = await sizes();
+    expect(result.root.enlarged).toBeCloseTo(
+      result.root.mobile * Inspect.TEXT_SCALE,
+      1,
+    );
+    expect(result.enlarged.get("Relative text")).toBeCloseTo(
+      (result.mobile.get("Relative text") ?? 0) * Inspect.TEXT_SCALE,
+      1,
+    );
+  });
+
+  test("px-fixed text is unchanged by the text size check", async (): Promise<void> => {
+    const result = await sizes();
+    expect(result.mobile.get("Fixed text")).toBe(FIXED_SIZE);
+    expect(result.enlarged.get("Fixed text")).toBe(FIXED_SIZE);
+  });
+
+  test("root font size is restored after the check", async (): Promise<void> => {
+    await page.evaluate((): void => {
+      document.documentElement.style.setProperty(
+        "font-size",
+        "18px",
+        "important",
+      );
+    });
+    const root = (): Promise<string> =>
+      page.evaluate((): string => document.documentElement.style.cssText);
+    const original: string = await root();
+    await Inspect.capture(page, "#sizing");
+    expect(await root()).toBe(original);
+    expect(
+      await page.evaluate(
+        (): string => getComputedStyle(document.documentElement).fontSize,
+      ),
+    ).toBe("18px");
   });
 
   test.skipIf(process.env.QA_INSPECT_DOCKER_TEST !== "1")(
