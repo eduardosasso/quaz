@@ -11,7 +11,7 @@ const DELETED: number = 2;
 const ARCHIVED: number = 3;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const tags = (value: string): Set<string> =>
+export const tags = (value: string): Set<string> =>
   new Set(
     value
       .split(",")
@@ -66,7 +66,9 @@ export type State = {
 };
 
 export const prepare = (db: Database): void => {
-  db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000");
+  db.exec(
+    "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000",
+  );
   db.exec(`
     CREATE TABLE IF NOT EXISTS qa_runs (
       id TEXT PRIMARY KEY, note_id INTEGER, board_id INTEGER NOT NULL DEFAULT 0,
@@ -107,6 +109,9 @@ export const prepare = (db: Database): void => {
     CREATE TABLE IF NOT EXISTS qa_reopenings (
       run TEXT NOT NULL REFERENCES qa_runs(id), note_id INTEGER NOT NULL,
       PRIMARY KEY (run,note_id)
+    );
+    CREATE TABLE IF NOT EXISTS qa_meta (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS qa_create_intents (
       run TEXT NOT NULL REFERENCES qa_runs(id), fingerprint TEXT NOT NULL,

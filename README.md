@@ -32,7 +32,7 @@ Source mode builds a disposable app image from a checkout on the Docker host. Th
 
 Set `fetch` to `true` to let the controller update the checkout itself. The controller fetches the deployed commit into `root`, inside its own state volume (for example `/qa/source`). It needs `deployment.url` and `deployment.repository`. It reads `QUAZ_SOURCE_TOKEN_<OWNER>` from the Quaz 1Password Environment. The owner comes from `deployment.repository`, in uppercase, and `-` becomes `_`. Use one fine-grained GitHub token per owner, with read-only Contents access. The owning account must create the token, because fine-grained tokens cannot reach repositories where you are only a collaborator. Quaz passes the token to Git through its process environment and never stores it. Quaz resets this checkout on every sync, so keep no other files there. The host mount stays read-only.
 
-Use `--mode discover` for a guided review. The controller selects reported fixes for `--mode verify`. Overdew holds the shared run state in a generic board document. `QUAZ_DB` is only an import source on first start. Set `QUAZ_BOOTSTRAP=empty` for a new board. Remove that setting after the first snapshot is saved.
+Use `--mode discover` for a guided review. The controller selects reported fixes for `--mode verify`. `QUAZ_DB` is the only store for run state. One process at a time owns it through an exclusive lock on `QUAZ_DB.lock`. On first start, Quaz migrates an old Overdew board document snapshot into `QUAZ_DB` once. Set `QUAZ_BOOTSTRAP=empty` for a new board; Quaz refuses it when the board already has QA cards for the project. Remove that setting after the first start.
 
 ## Development
 
