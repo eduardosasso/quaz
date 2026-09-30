@@ -34,12 +34,24 @@ const resolveFix = async (
   project: Project.Project,
 ): Promise<string | null> => {
   if (!project.deployment?.repository) return ticket.fix;
+  const comments: string[] = await client.comments(ticket.id);
   const link: Fix.Pull | null = Fix.pull(
     ticket.description,
-    await client.comments(ticket.id),
+    comments,
     project.deployment.repository,
   );
-  if (!link) return ticket.fix;
+  if (!link) {
+    const commit: string | null = Fix.commit(
+      ticket.description,
+      comments,
+      project.deployment.repository,
+    );
+    if (!commit) return ticket.fix;
+    await client.request(`/cards/${ticket.id}/fix`, "PUT", {
+      revision: commit,
+    });
+    return commit;
+  }
   const child = Bun.spawn(
     [
       "gh",

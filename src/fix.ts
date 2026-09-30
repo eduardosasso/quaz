@@ -28,6 +28,25 @@ export const pull = (
   return match ? { repository: match[1], number: match[3] } : null;
 };
 
+export const commit = (
+  description: string,
+  comments: string[],
+  repository: string,
+): string | null => {
+  const match: RegExpMatchArray | undefined = links(
+    description,
+    comments,
+    repository,
+  )
+    .filter(
+      (entry): boolean =>
+        entry[2] === "commit" && /^[a-f0-9]{40}$/i.test(entry[3]),
+    )
+    .at(-1);
+
+  return match ? match[3].toLowerCase() : null;
+};
+
 export const reference = (
   description: string,
   comments: string[],
