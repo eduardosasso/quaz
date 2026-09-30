@@ -718,7 +718,7 @@ const linked = <T extends Pick<Judgment, "verdict" | "candidateId">>(
   if (judgment.verdict !== "concern")
     return judgment.candidateId === null
       ? judgment
-      : { ...judgment, candidateId: null };
+      : ({ ...judgment, candidateId: null } as T);
   if (
     judgment.candidateId !== null &&
     candidates.includes(judgment.candidateId)
@@ -733,7 +733,7 @@ const linked = <T extends Pick<Judgment, "verdict" | "candidateId">>(
   );
   limitations.push(`${UNLINKED_LIMITATION} (${name})`);
 
-  return { ...judgment, verdict: "unknown", candidateId: null };
+  return { ...judgment, verdict: "unknown", candidateId: null } as T;
 };
 const linking = (value: Assessment): Assessment => {
   const candidates: string[] = value.candidates.map(
