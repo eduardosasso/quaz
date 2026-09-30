@@ -139,7 +139,7 @@ export type Ticket = {
   description: string;
   tags: string;
   test: Case;
-  fix: string | null;
+  checked: string | null;
 };
 export type Flow = {
   key: string;

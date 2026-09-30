@@ -58,7 +58,7 @@ const ticket = (id: number): Protocol.Ticket => ({
   content: "test",
   description: "",
   tags: "qa,needs-verification",
-  fix: REVISION,
+  checked: null,
   test: {
     flow: "sample-flow",
     route: "/",
@@ -103,6 +103,25 @@ describe("QA controller scheduling", (): void => {
     expect(plans(state({ tickets: [ticket(2)] }), { parallel: 2 })).toEqual([
       { mode: "verify", scenario: "empty", ticket: 2 },
       { mode: "discover", scenario: "empty" },
+    ]);
+  });
+  test("verify runs once per deployed revision", (): void => {
+    const done: Protocol.Ticket = { ...ticket(2), checked: REVISION };
+    const settled: Protocol.Run = run(NOW - 10_000_000, {
+      mode: "verify",
+      target: 2,
+    });
+
+    expect(plans(state({ tickets: [done] }), { mode: "verify" })).toEqual([]);
+    expect(
+      plans(state({ tickets: [done], runs: [settled] }), { mode: "verify" }),
+    ).toEqual([]);
+  });
+  test("a new revision makes a waiting ticket due again", (): void => {
+    const waiting: Protocol.Ticket = { ...ticket(2), checked: "b".repeat(40) };
+
+    expect(plans(state({ tickets: [waiting] }), { mode: "verify" })).toEqual([
+      { mode: "verify", scenario: "empty", ticket: 2 },
     ]);
   });
   test("active verification and remote leases prevent duplicate work", (): void => {
@@ -960,7 +979,6 @@ describe("QA interrupted run recovery", (): void => {
     );
     const finishes: Protocol.Finish[] = [];
     const client: Client.Client = {
-      comments: async (): Promise<string[]> => [],
       request: async <T>(
         endpoint: string,
         _method?: string,
@@ -1027,7 +1045,6 @@ describe("QA automatic publication recovery", (): void => {
     let lost: boolean = true;
     const ids: string[] = [];
     const client: Client.Client = {
-      comments: async (): Promise<string[]> => [],
       request: async <T>(
         endpoint: string,
         _method?: string,

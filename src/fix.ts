@@ -1,7 +1,5 @@
 const LINK: RegExp =
-  /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(pull|commit)\/(\w+)/g;
-
-export type Pull = { repository: string; number: string };
+  /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|commit)\/\w+/g;
 
 const links = (
   description: string,
@@ -11,41 +9,6 @@ const links = (
   Array.from(
     `${description}\n${JSON.stringify(comments)}`.matchAll(LINK),
   ).filter((entry): boolean => entry[1] === repository);
-
-export const pull = (
-  description: string,
-  comments: string[],
-  repository: string,
-): Pull | null => {
-  const match: RegExpMatchArray | undefined = links(
-    description,
-    comments,
-    repository,
-  )
-    .filter((entry): boolean => entry[2] === "pull" && /^\d+$/.test(entry[3]))
-    .at(-1);
-
-  return match ? { repository: match[1], number: match[3] } : null;
-};
-
-export const commit = (
-  description: string,
-  comments: string[],
-  repository: string,
-): string | null => {
-  const match: RegExpMatchArray | undefined = links(
-    description,
-    comments,
-    repository,
-  )
-    .filter(
-      (entry): boolean =>
-        entry[2] === "commit" && /^[a-f0-9]{40}$/i.test(entry[3]),
-    )
-    .at(-1);
-
-  return match ? match[3].toLowerCase() : null;
-};
 
 export const reference = (
   description: string,

@@ -269,7 +269,6 @@ export type Client = {
     bytes: Uint8Array,
     mime: string,
   ) => Promise<number>;
-  comments: (note: number) => Promise<string[]>;
   prune?: (days: number) => Promise<string[]>;
   close?: () => Promise<void>;
 };
@@ -328,7 +327,6 @@ export const open = async (
         target.pathname,
       );
       const finish = /^\/runs\/([^/]+)\/finish$/.exec(target.pathname);
-      const fix = /^\/cards\/(\d+)\/fix$/.exec(target.pathname);
       let result: unknown;
       if (method === "GET" && target.pathname === "/state")
         result = await state.state(
@@ -363,19 +361,13 @@ export const open = async (
         };
       } else if (method === "POST" && publication)
         result = await state.publication(publication[1]);
-      else if (method === "PUT" && fix) {
-        const input = z
-          .object({ revision: Protocol.revision })
-          .strict()
-          .parse(body);
-        await state.fix(Number(fix[1]), input.revision);
-        result = { revision: input.revision };
-      } else if (method === "POST" && finish)
+      else if (method === "POST" && finish)
         result = await Finish.publish(
           state,
           finish[1],
           Protocol.finish.parse(body),
           cap,
+          CONFIG.controller.reopen,
         );
       else if (method === "GET" && run) result = state.run(run[1]);
       else
@@ -411,8 +403,6 @@ export const open = async (
       mime: string,
     ): Promise<number> =>
       exclusive((): Promise<number> => uploadRaw(run, path, bytes, mime));
-    const comments = async (note: number): Promise<string[]> =>
-      (await state.tracker.get(note))?.comments ?? [];
     const close = async (): Promise<void> => {
       await queue;
       try {
@@ -425,7 +415,7 @@ export const open = async (
     const prune = (days: number): Promise<string[]> =>
       exclusive((): Promise<string[]> => Promise.resolve(state.prune(days)));
 
-    return { request, upload, comments, prune, close };
+    return { request, upload, prune, close };
   } catch (error: unknown) {
     try {
       database?.close();

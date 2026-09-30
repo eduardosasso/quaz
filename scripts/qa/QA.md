@@ -122,7 +122,7 @@ Repeat the supplied candidate steps in a fresh mobile browser context. Do not di
 Discovery validation starts in a separate app database and login, seeded with the original scenario.
 The reviewer's changes do not carry over. Repeat setup actions from the entry page before checking the result.
 Check every candidate's acceptance criteria against its steps and evidence. Reject extra requirements that those steps cannot test.
-For verification, the old defect disappearing supports a pass. Test each saved acceptance check against the deployed fix.
+For verification, the old defect disappearing supports a pass. Test each saved acceptance check against the deployed app.
 If a check covers failure handling, find and trigger the real failure boundary in a fresh context. A local action can fail in browser storage or another client dependency without a network request. Restore the context afterward. Mark the check untested only when you cannot establish its boundary.
 For a design candidate, independently compare the peer treatment or supporting composition using the shared design guidance. Check the control roles through interaction. A visible difference alone is insufficient, but a supported design concern does not require broken functionality. Explain whether the comparison, improvement, and tradeoff follow from the observed task. Keep unverified intent or behavior inconclusive.
 Return confirmed, rejected, or inconclusive per candidate. Confirmed needs your own screenshot returned as an inline image.

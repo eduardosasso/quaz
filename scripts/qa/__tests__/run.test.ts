@@ -8,7 +8,6 @@ import * as Runner from "@qa/run";
 import type * as Protocol from "@/qa_protocol";
 
 const client: Client.Client = {
-  comments: async (): Promise<string[]> => [],
   request: async (): Promise<never> => {
     throw new Error("Unexpected client request");
   },
@@ -329,7 +328,6 @@ describe("crash recovery placeholder", (): void => {
       }),
     );
     const recoverClient: Client.Client = {
-      comments: async (): Promise<string[]> => [],
       upload: async (): Promise<number> => 1,
       request: async <T>(path: string): Promise<T> => {
         if (path === "/runs") return run as T;

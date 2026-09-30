@@ -19,6 +19,7 @@
     "intervalSeconds": 300,
     "retrySeconds": 30,
     "attempts": 3,
+    "reopen": 3,
     "cap": 20,
     "backoffSeconds": 60,
     "maxBackoffSeconds": 3600,

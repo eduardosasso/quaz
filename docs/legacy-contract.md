@@ -32,15 +32,16 @@ Codex is the first provider. Provider invocation is isolated in `scripts/qa/prov
 - Matching issues reuse their original cards and receive evidence comments. Human fields and existing acceptance tests remain intact.
 - New issues receive `qa` and `needs-verification` tags. Exact identities remain an additional integrity check.
 - Verification selects completed or archived pending QA cards from the selected project.
-- The expected fix, deployed revision, and tested source revision must match before browser tests run.
+- The deployed revision and tested source revision must match before browser tests run. Quaz judges a fix only by testing the running app; it never calls GitHub.
+- A card is due when the deployed revision differs from the last revision it was checked against. Quaz checks each card once per deployed revision.
 - Every saved acceptance criterion must be checked before a result can pass.
 - Passing removes `needs-verification` and `needs-attention`, and adds `verified`.
-- Failing reopens the original card and preserves `needs-verification`.
+- A failed retest leaves the card unchanged and is recorded for that revision. Failures on three distinct deployed revisions in a row (`controller.reopen` in `scripts/qa/config.json`) reopen the original card with evidence and preserve `needs-verification`. A reproduced failure is not a run error and does not count toward the retry limit.
 - Missing setup adds `needs-attention`. Only an actionable blocked result mentions the configured person.
 - An unavailable or different deployment leaves verification pending without a mention.
 - A changed card or expired claim prevents an old result from changing the card.
 - A newly reproduced issue reopens its original card. Older discovery cannot undo newer verification.
-- Complete a QA card with a fix reference and Quaz verifies the fix. A fix reference is a recorded fix revision, or a GitHub pull request or commit link to `deployment.repository` in the description or comments. The link can be unmerged.
+- Complete a QA card with a fix reference and Quaz verifies the fix. A fix reference is a recorded fix revision, or a GitHub pull request or commit link to `deployment.repository` in the description or comments. Quaz reads the link only as text; the PR need not be merged.
 - Complete a QA card without a fix reference and Quaz treats it as won't fix. It never reopens, verifies, or files that finding or its root cause again. Reopen the card to undo.
 - Delete a QA card and Quaz forgets it. The same finding can later become a new card.
 - Retries preserve one run, finding, artifact, and result comment.
@@ -151,8 +152,7 @@ docker run -d --init --name qa --restart unless-stopped --stop-timeout 120 \
   overdew-qa:local
 ```
 
-Supply the three `OVERDEW_QA_*` variables through your secret manager before startup.
-For private fix PRs, also supply a scoped `GH_TOKEN` to the controller. Neither token enters workers.
+Supply the three `OVERDEW_QA_*` variables through your secret manager before startup. They never enter workers.
 The `/auth` directory needs an existing Codex login and must allow credential refresh.
 Mount the directory, rather than one file, because refresh replaces `auth.json` atomically.
 Smoke mode does not require a Codex login. The default Docker command starts controller mode.
@@ -209,9 +209,8 @@ Use `revision: "source"` for disposable local tests. It hashes configured source
 Use `revision: "git"` for deployed-fix verification. This requires a clean checkout at the deployed commit.
 The project must expose a version endpoint returning `{ "revision": "<full commit SHA>" }`.
 Configure it as `deployment.url`. The Overdew adapter's target provides `/api/version` from `KAMAL_VERSION`.
-If `deployment.repository` is set, the runner resolves the latest matching merged GitHub PR linked in the card or comments.
-Otherwise the expected fix revision can be recorded through the board's QA API.
-An absent, unmerged, mismatched, or unreachable deployment blocks verification.
+The runner tests whatever revision the endpoint reports, and the test image must contain that revision.
+An absent deployment blocks verification; a mismatched or unreachable one leaves it waiting.
 A disposable replay of a deployed revision does not prove production configuration or external integrations.
 
 ## Evidence, recovery, and credentials
