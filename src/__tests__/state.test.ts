@@ -352,6 +352,50 @@ test("ordinary QA titled issue stays in the catalog", async () => {
   ]);
 });
 
+const ACTIVE: number = 0;
+const COMPLETED: number = 1;
+const ARCHIVED: number = 3;
+const card = (
+  id: number,
+  status: number,
+  description: string = "",
+): Tracker.Card => ({
+  id,
+  version: 1,
+  title: `Issue ${id}`,
+  description,
+  checklist: "[]",
+  tags: "",
+  status,
+  comments: [],
+});
+
+test("catalog leaves out archived cards", async () => {
+  const { state, cards } = fixture();
+  cards.set(1, card(1, ACTIVE));
+  cards.set(2, card(2, COMPLETED));
+  cards.set(3, card(3, ARCHIVED));
+
+  expect(
+    (await state.catalog("sample")).cards.map((entry) => entry.id),
+  ).toEqual([1, 2]);
+});
+
+test("catalog under the limit after archiving", async () => {
+  const { state, cards } = fixture();
+  const bulk: string = "x".repeat(Protocol.CATALOG_BYTES);
+  cards.set(1, card(1, ACTIVE));
+  cards.set(2, card(2, ARCHIVED, bulk));
+
+  expect(
+    (await state.catalog("sample")).cards.map((entry) => entry.id),
+  ).toEqual([1]);
+
+  cards.set(3, card(3, COMPLETED, bulk));
+
+  await expect(state.catalog("sample")).rejects.toThrow("review limit");
+});
+
 test.each(["issue", "run"] as const)(
   "discovery retries after a partial %s card write",
   async (failure): Promise<void> => {
