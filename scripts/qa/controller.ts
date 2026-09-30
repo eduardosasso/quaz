@@ -301,7 +301,7 @@ export const loop = async (
       if (settings.runs && launched >= settings.runs && !active.size) break;
       if (consecutiveFailures >= settings.attempts && !active.size)
         throw new Halt(
-          "Worker retry limit reached; inspect the tracking board and controller logs",
+          "Worker retry limit reached; inspect the controller logs",
         );
       try {
         if (!active.size) await dependencies.recover();
@@ -411,7 +411,7 @@ export const loop = async (
   }
   if (failedRuns && settings.runs)
     throw new Halt(
-      `${failedRuns} QA runs fail; inspect the tracking board reports`,
+      `${failedRuns} QA runs fail; inspect the controller logs and Quaz run reports`,
     );
 };
 export const start = async (
@@ -524,7 +524,12 @@ export const start = async (
           client,
         );
       },
-      recover: async (): Promise<void> => recovery(client, runtime.directory),
+      recover: async (): Promise<void> => {
+        await recovery(client, runtime.directory);
+        const pruned: string[] =
+          (await client.prune?.(CONFIG.controller.artifactDays)) ?? [];
+        if (pruned.length) log({ event: "artifacts-pruned", runs: pruned });
+      },
       now: Date.now,
       wait: Backoff.wait,
       log,

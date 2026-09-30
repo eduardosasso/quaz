@@ -270,6 +270,7 @@ export type Client = {
     mime: string,
   ) => Promise<number>;
   comments: (note: number) => Promise<string[]>;
+  prune?: (days: number) => Promise<string[]>;
   close?: () => Promise<void>;
 };
 export const open = async (
@@ -290,7 +291,11 @@ export const open = async (
   try {
     if (!local(file)) await migrate(adapter, url, board, selected, file);
     database = new Database(file);
-    const state: State.State = State.open(database, adapter);
+    const state: State.State = State.open(
+      database,
+      adapter,
+      join(dirname(file), State.ARTIFACTS),
+    );
     destination(state.db, url, board);
     let queue: Promise<void> = Promise.resolve();
     const exclusive = <T>(action: () => Promise<T>): Promise<T> => {
@@ -384,37 +389,9 @@ export const open = async (
         throw new Error("Invalid QA artifact path");
       if (bytes.byteLength > Protocol.MAX_BYTES)
         throw new Error("QA artifact is too large");
-      const value: Protocol.Run = state.active(run);
-      const hash: string = createHash("sha256").update(bytes).digest("hex");
-      const prior = state.db
-        .query<
-          { digest: string; mime: string; attachment: number },
-          [string, string]
-        >(
-          "SELECT digest,mime,attachment FROM qa_artifacts WHERE run=? AND path=?",
-        )
-        .get(run, path);
-      if (prior) {
-        if (prior.digest !== hash || prior.mime !== mime)
-          throw new Error("Artifact path has different content");
-        return prior.attachment;
-      }
-      const extension: string = path.includes(".")
-        ? `.${path.split(".").at(-1)}`
-        : "";
-      const name: string = `quaz-${digest(`${run}:${path}:${hash}:${mime}`).slice(0, 32)}${extension}`;
-      const existing = (await state.tracker.attachments(value.note_id)).find(
-        (entry): boolean => entry.name === name,
-      );
-      const attachment: number =
-        existing?.id ??
-        (await state.tracker.upload(value.note_id, name, bytes, mime)).id;
-      state.db
-        .query(
-          "INSERT OR IGNORE INTO qa_artifacts (run,path,digest,mime,attachment) VALUES (?,?,?,?,?)",
-        )
-        .run(run, path, hash, mime, attachment);
-      return attachment;
+      state.active(run);
+
+      return state.store(run, path, bytes, mime);
     };
     const request = <T>(
       path: string,
@@ -440,7 +417,10 @@ export const open = async (
       }
     };
 
-    return { request, upload, comments, close };
+    const prune = (days: number): Promise<string[]> =>
+      exclusive((): Promise<string[]> => Promise.resolve(state.prune(days)));
+
+    return { request, upload, comments, prune, close };
   } catch (error: unknown) {
     try {
       database?.close();

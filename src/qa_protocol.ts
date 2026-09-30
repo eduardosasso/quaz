@@ -121,7 +121,7 @@ export const finish = z
 export type Finish = z.infer<typeof finish>;
 export type Run = Omit<Begin, "runner"> & {
   runner: Runner | null;
-  note_id: number;
+  note_id: number | null;
   board_id: number;
   owner: string;
   status: string;

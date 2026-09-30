@@ -134,7 +134,7 @@ export const migrate = (
       for (const row of runs)
         target
           ?.query(
-            "INSERT INTO qa_runs (rowid,id,board_id,note_id,owner,project,mode,revision,scenario,attention,status,expires,target,snapshot,receipt,request,result,started) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO qa_runs (rowid,id,board_id,note_id,owner,project,mode,revision,scenario,attention,status,expires,target,snapshot,receipt,request,result,started,recorded) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           )
           .run(
             row.sequence,
@@ -155,6 +155,7 @@ export const migrate = (
             row.request,
             row.result,
             row.started,
+            row.note_id === null ? 0 : 1,
           );
       for (const row of flows)
         target

@@ -83,7 +83,7 @@ test("worker receives only run-scoped mounts and bridge access", () => {
     revision: "a".repeat(64),
     runner: null,
     scenario: "empty",
-    note_id: 1,
+    note_id: null,
     board_id: 1,
     owner: "quaz",
     status: "claimed",

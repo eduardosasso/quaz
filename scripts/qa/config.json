@@ -22,6 +22,7 @@
     "backoffSeconds": 60,
     "maxBackoffSeconds": 3600,
     "restartLimit": 5,
+    "artifactDays": 14,
     "directory": "/qa",
     "skill": "/opt/impeccable",
     "label": "app.qa.controller"

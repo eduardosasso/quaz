@@ -1,5 +1,6 @@
+import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import * as Client from "@qa/client";
@@ -8,7 +9,9 @@ import * as Lifecycle from "@qa/lifecycle";
 import type * as Project from "@qa/project";
 import * as Review from "@qa/review";
 import * as Runner from "@qa/run";
-import type * as Protocol from "@/qa_protocol";
+import * as Protocol from "@/qa_protocol";
+import * as State from "@/state";
+import type * as Tracker from "@/tracker";
 
 const REVISION: string = "a".repeat(40);
 const NEXT_REVISION: string = "b".repeat(40);
@@ -19,7 +22,7 @@ const RUN: Protocol.Run = {
   revision: REVISION,
   runner: null,
   scenario: "new-account",
-  note_id: 10,
+  note_id: null,
   board_id: 1,
   owner: "reviewer",
   status: "running",
@@ -493,26 +496,56 @@ describe("QA orchestration boundaries", (): void => {
       join(output, "assignment.json"),
       "private assignment state",
     );
-    const uploaded: string[] = [];
+    const database: Database = new Database(":memory:");
+    const root: string = join(directory, "local-runs");
+    const state: State.State = State.open(
+      database,
+      {} as Tracker.Tracker,
+      root,
+    );
+    state.begin(
+      Protocol.begin.parse({
+        id: RUN.id,
+        project: RUN.project,
+        mode: RUN.mode,
+        revision: RUN.revision,
+        runner: { source: REVISION, image: `sha256:${"b".repeat(64)}` },
+        scenario: RUN.scenario,
+      }),
+    );
     const store: Client.Client = {
       ...client(),
-      upload: async (_run: string, path: string): Promise<number> => {
-        uploaded.push(path);
-        return uploaded.length;
-      },
+      upload: async (
+        run: string,
+        path: string,
+        bytes: Uint8Array,
+        mime: string,
+      ): Promise<number> => state.store(run, path, bytes, mime),
     };
     const ids: Map<string, number> = await Lifecycle.artifacts(
       store,
       RUN.id,
       output,
     );
-    expect(uploaded).toEqual([
-      "report.json",
-      "validator/events.jsonl.gz",
-      "validator/screen.png",
+    const saved: string[] = state.db
+      .query<{ file: string }, []>(
+        "SELECT file FROM qa_artifacts ORDER BY file",
+      )
+      .all()
+      .map((row): string => row.file);
+    expect(saved).toEqual([
+      `${RUN.id}/report.json`,
+      `${RUN.id}/validator/events.jsonl.gz`,
+      `${RUN.id}/validator/screen.png`,
     ]);
     expect(ids.get("validator/screen.png")).toBe(3);
     expect(ids.has("recovery.json")).toBe(false);
+    expect(
+      await Bun.file(state.artifact(`${RUN.id}/validator/screen.png`)).text(),
+    ).toBe("screenshot");
+    expect(
+      (await stat(state.artifact(`${RUN.id}/report.json`))).mode & 0o777,
+    ).toBe(0o600);
   });
 
   test.each(["yml", "yaml", "txt"])(
