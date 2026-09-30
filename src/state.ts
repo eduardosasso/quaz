@@ -22,7 +22,7 @@ const FILE_MODE: number = 0o600;
 const DIRECTORY_MODE: number = 0o700;
 export const ARTIFACTS: string = "runs";
 const EVIDENCE_KEY: string = "evidence";
-const LIVE: readonly string[] = ["running", "publishing"];
+export const LIVE: readonly string[] = ["running", "publishing"];
 const RUN_COLUMNS: string =
   "id,note_id,board_id,owner,project,mode,revision,scenario,attention,runner,status,expires,target,snapshot,receipt,request,result,started,publish,publish_lease,publish_held,publish_target_version,publish_target_step,recorded";
 const HISTORY_LIMIT: number = 100;
@@ -37,7 +37,7 @@ export const tags = (value: string): Set<string> =>
       .map((tag): string => tag.trim())
       .filter(Boolean),
   );
-const isRunCard = (card: Tracker.Card): boolean =>
+export const isRunCard = (card: Tracker.Card): boolean =>
   /^QA (smoke|discover|verify): [a-z0-9_-]+$/.test(card.title) &&
   /^Run qa-[a-zA-Z0-9_-]+\r?\n/.test(card.description);
 const conflict = (message: string): never => {

@@ -27,8 +27,6 @@ const LEASE_SECONDS: number = 120;
 const DOCUMENT_ID_LENGTH: number = 48;
 const SNAPSHOT_BYTES: number = 64 * 1024 * 1024;
 const LOCK_MODE: number = 0o600;
-const AUTHORITY_KEY: string = "authority";
-const AUTHORITY_LOCAL: string = "local";
 const SIDECARS: string[] = ["-wal", "-shm"];
 const digest = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
@@ -66,7 +64,7 @@ const local = (file: string): boolean => {
         .query<{ value: string }, [string]>(
           "SELECT value FROM qa_meta WHERE key=?",
         )
-        .get(AUTHORITY_KEY)?.value === AUTHORITY_LOCAL,
+        .get(Migrate.AUTHORITY)?.value === Migrate.LOCAL,
     );
   } finally {
     database.close();
@@ -97,7 +95,7 @@ const destination = (database: Database, url: string, board: string): void => {
   database.exec(
     "CREATE TABLE IF NOT EXISTS qa_destination (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)",
   );
-  const target: string = `${new URL(url).origin}/${board}`;
+  const target: string = Migrate.target(url, board);
   const prior = database
     .query<{ value: string }, []>("SELECT value FROM qa_destination WHERE id=1")
     .get();
@@ -225,7 +223,7 @@ const migrate = async (
       destination(database, url, board);
       database
         .query("INSERT OR REPLACE INTO qa_meta (key,value) VALUES (?,?)")
-        .run(AUTHORITY_KEY, AUTHORITY_LOCAL);
+        .run(Migrate.AUTHORITY, Migrate.LOCAL);
       database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } finally {
       database.close();

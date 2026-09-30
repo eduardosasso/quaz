@@ -5,6 +5,10 @@ import * as State from "@/state";
 import * as Tracker from "@/tracker";
 
 export const IMPORTED: string = "records_imported";
+export const AUTHORITY: string = "authority";
+export const LOCAL: string = "local";
+export const target = (url: string, board: string): string =>
+  `${new URL(url).origin}/${board}`;
 const PROJECT_TAG: string = "project:";
 
 const managed = (card: Tracker.Card): boolean => {
