@@ -9,6 +9,7 @@ const COMPLETED: number = 1;
 const ARCHIVED: number = 3;
 const COMMENT_MAX: number = 4000;
 const MILLISECONDS: number = 1000;
+export const UNCAPPED: number = Number.POSITIVE_INFINITY;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const commentDigest = (value: string): string =>
@@ -29,6 +30,7 @@ export type Result = {
   created: number[];
   replayed: boolean;
   held?: string;
+  skipped?: string[];
 };
 
 const evidence = (state: State.State, run: string, ids: number[]): void => {
@@ -279,6 +281,7 @@ export const publish = async (
   state: State.State,
   id: string,
   input: Protocol.Finish,
+  cap: number = UNCAPPED,
 ): Promise<Result> => {
   const run: ReturnType<State.State["run"]> = state.run(id);
   const receipt: string = digest(input);
@@ -293,6 +296,7 @@ export const publish = async (
       cards: number[];
       created: number[];
       held?: string;
+      skipped?: string[];
     };
     return {
       run,
@@ -300,6 +304,7 @@ export const publish = async (
       created: saved.created ?? [],
       replayed: true,
       ...(saved.held ? { held: saved.held } : {}),
+      ...(saved.skipped ? { skipped: saved.skipped } : {}),
     };
   }
   const pending = state.db
@@ -534,6 +539,12 @@ export const publish = async (
       }
     }
     const destinations: Map<string, number> = new Map();
+    const skipped: Protocol.Finding[] = [];
+    const open: number =
+      run.mode === "discover" && input.findings.length && !expired && !held
+        ? await state.count(run.project)
+        : 0;
+    let room: number = Math.max(0, cap - open);
     if (run.mode === "discover" && !expired && !held)
       for (const choice of input.matching?.decisions ?? []) {
         renew();
@@ -563,6 +574,10 @@ export const publish = async (
             "SELECT note_id FROM qa_pending_findings WHERE run=? AND fingerprint=?",
           )
           .get(id, finding.fingerprint);
+        if (!target && !staged && room <= 0) {
+          skipped.push(finding);
+          continue;
+        }
         const stale = state.db
           .query<{ note_id: number }, [string, string]>(
             "SELECT note_id FROM qa_findings WHERE project=? AND fingerprint=?",
@@ -690,6 +705,7 @@ export const publish = async (
         }
         let noteId: number | undefined = staged?.note_id;
         if (!noteId) {
+          room--;
           const key: string = `quaz-finding-${digest(`${run.project}:${finding.fingerprint}`)}`;
           renew();
           state.db
@@ -746,10 +762,15 @@ export const publish = async (
         created.push(noteId);
       }
     if (expired) status = "superseded";
-    const result: { cards: number[]; created: number[]; held?: string } = {
+    const result: Omit<Result, "run" | "replayed"> = {
       cards,
       created,
       ...(held ? { held } : {}),
+      ...(skipped.length
+        ? {
+            skipped: skipped.map((entry): string => entry.fingerprint),
+          }
+        : {}),
     };
     state.db.transaction((): void => {
       state.db
@@ -772,6 +793,11 @@ export const publish = async (
                   },
                 }
               : {}),
+            ...(skipped.length
+              ? {
+                  skipped: { reason: Protocol.CAP_REASON, findings: skipped },
+                }
+              : {}),
           }),
           id,
         );
@@ -784,6 +810,19 @@ export const publish = async (
       state.db.query("DELETE FROM qa_pending_findings WHERE run=?").run(id);
       state.db.query("DELETE FROM qa_reopenings WHERE run=?").run(id);
     })();
+    if (skipped.length)
+      console.log(
+        JSON.stringify({
+          event: "cards-capped",
+          run: id,
+          project: run.project,
+          open,
+          cap,
+          created: created.length,
+          skipped: skipped.length,
+          reason: Protocol.CAP_REASON,
+        }),
+      );
     console.log(
       JSON.stringify({
         event: "run-finished",
@@ -792,6 +831,7 @@ export const publish = async (
         held: held ?? null,
         cards: cards.length,
         created: created.length,
+        skipped: skipped.length,
       }),
     );
     return {
@@ -800,6 +840,7 @@ export const publish = async (
       created,
       replayed: false,
       ...(held ? { held } : {}),
+      ...(result.skipped ? { skipped: result.skipped } : {}),
     };
   } catch (error: unknown) {
     state.db.query("UPDATE qa_runs SET publish_lease=0 WHERE id=?").run(id);

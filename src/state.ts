@@ -29,6 +29,7 @@ const RUN_COLUMNS: string =
 const HISTORY_LIMIT: number = 100;
 export const CARD_READS: number = 4;
 const CLOSED: readonly number[] = [1, 3];
+const ELLIPSIS: string = "…";
 export const DELETED: number = 2;
 const digest = (value: unknown): string =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -39,6 +40,20 @@ export const tags = (value: string): Set<string> =>
       .map((tag): string => tag.trim())
       .filter(Boolean),
   );
+export const opened = (cards: Tracker.Card[], project: string): number =>
+  cards.filter((card): boolean => {
+    const labels: Set<string> = tags(card.tags);
+
+    return labels.has(Protocol.TAG.issue) && labels.has(`project:${project}`);
+  }).length;
+export const summary = (text: string): string => {
+  const flat: string = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= Protocol.SUMMARY_CHARS) return flat;
+  const cut: string = flat.slice(0, Protocol.SUMMARY_CHARS - ELLIPSIS.length);
+  const boundary: number = cut.lastIndexOf(" ");
+
+  return `${(boundary > 0 ? cut.slice(0, boundary) : cut).trimEnd()}${ELLIPSIS}`;
+};
 export const isRunCard = (card: Tracker.Card): boolean =>
   /^QA (smoke|discover|verify): [a-z0-9_-]+$/.test(card.title) &&
   /^Run qa-[a-zA-Z0-9_-]+\r?\n/.test(card.description);
@@ -76,6 +91,7 @@ export type State = {
   prune: (days: number) => string[];
   ready: (id: string) => Protocol.Run;
   state: (project: string, revision?: string) => Promise<Protocol.State>;
+  count: (project: string) => Promise<number>;
   catalog: (project: string) => Promise<Protocol.Catalog>;
   publication: (id: string) => Promise<Protocol.Catalog | null>;
   claim: (
@@ -456,11 +472,9 @@ export const open = (
         id: card.id,
         version: card.version,
         title: card.title,
-        description: card.description,
-        checklist: card.checklist,
+        summary: summary(card.description),
         tags: card.tags,
         status: card.status,
-        comments: card.comments,
         fingerprints: known.get(card.id)?.fingerprints ?? [],
       }));
     if (
@@ -470,6 +484,8 @@ export const open = (
       conflict("The issue catalog exceeds the review limit");
     return { snapshot: digest(selected), cards: selected };
   };
+  const count = async (project: string): Promise<number> =>
+    opened(await tracker.list(), project);
   const state = async (
     project: string,
     revision?: string,
@@ -546,6 +562,7 @@ export const open = (
         .all(project),
       tickets,
       runs: selected,
+      open: await count(project),
       ...(revision ? { scheduledRevision: revision } : {}),
     };
   };
@@ -633,6 +650,7 @@ export const open = (
     prune,
     ready,
     state,
+    count,
     catalog,
     publication,
     claim,

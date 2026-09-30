@@ -527,16 +527,64 @@ test("catalog limit counts only active cards", async () => {
   const { state, cards } = fixture();
   const bulk: string = "x".repeat(Protocol.CATALOG_BYTES);
   cards.set(1, card(1, ACTIVE));
-  cards.set(2, card(2, ARCHIVED, bulk));
-  cards.set(3, card(3, COMPLETED, bulk));
+  cards.set(2, { ...card(2, ARCHIVED), title: bulk });
+  cards.set(3, { ...card(3, COMPLETED), title: bulk });
 
   expect(
     (await state.catalog("sample")).cards.map((entry) => entry.id),
   ).toEqual([1]);
 
-  cards.set(4, card(4, ACTIVE, bulk));
+  cards.set(4, { ...card(4, ACTIVE), title: bulk });
 
   await expect(state.catalog("sample")).rejects.toThrow("review limit");
+});
+
+test("catalog entries are compact", async () => {
+  const { state, cards, comments } = fixture();
+  const words: string = "alpha beta gamma delta ".repeat(100);
+  cards.set(1, {
+    ...card(1, ACTIVE, "  Short\n\ndescription  "),
+    checklist: '[{"text":"Saved","done":false}]',
+  });
+  cards.set(2, card(2, ACTIVE, words));
+  comments.set(2, ["a long comment"]);
+
+  const [short, long] = (await state.catalog("sample")).cards;
+
+  expect(Object.keys(short).sort()).toEqual([
+    "fingerprints",
+    "id",
+    "status",
+    "summary",
+    "tags",
+    "title",
+    "version",
+  ]);
+  expect(short.summary).toBe("Short description");
+  expect(long.summary.length).toBeLessThanOrEqual(Protocol.SUMMARY_CHARS);
+  expect(long.summary.endsWith("…")).toBe(true);
+  expect(words.trim().startsWith(long.summary.slice(0, -1))).toBe(true);
+  expect(["alpha", "beta", "gamma", "delta"]).toContain(
+    long.summary.slice(0, -1).split(" ").at(-1) ?? "",
+  );
+  expect(JSON.stringify(long)).not.toContain("a long comment");
+});
+
+test("state counts open QA cards", async () => {
+  const { state, cards } = fixture();
+  cards.set(1, { ...card(1, ACTIVE), tags: "qa,project:sample" });
+  cards.set(2, {
+    ...card(2, ACTIVE),
+    tags: "qa,needs-verification,project:sample",
+  });
+  cards.set(3, { ...card(3, ACTIVE), tags: "qa,project:other" });
+  cards.set(4, { ...card(4, ACTIVE), tags: "project:sample" });
+  cards.set(5, { ...card(5, COMPLETED), tags: "qa,project:sample" });
+  cards.set(6, { ...card(6, ARCHIVED), tags: "qa,project:sample" });
+  cards.set(7, { ...card(7, ACTIVE), tags: "qa-run,project:sample" });
+
+  expect((await state.state("sample")).open).toBe(2);
+  expect((await state.state("other")).open).toBe(1);
 });
 
 test("discovery retries after a partial issue card write", async () => {
@@ -1889,4 +1937,119 @@ test("state polls finding cards with bounded concurrency", async () => {
   await state.state("sample");
   expect(total).toBe(reads);
   expect(peak).toBe(State.CARD_READS);
+});
+
+const cohort = async (
+  cap: number,
+  total: number,
+): Promise<{
+  state: State.State;
+  cards: Map<number, Tracker.Card>;
+  comments: Map<number, string[]>;
+  run: Protocol.Run;
+  found: Protocol.Finding[];
+  finish: (decisions: Protocol.Matching["decisions"]) => Promise<Finish.Result>;
+}> => {
+  const { state, cards, comments } = fixture();
+  const run: Protocol.Run = state.begin(begin("discover"));
+  state.ready(run.id);
+  const attachment: number = state.store(
+    run.id,
+    "proof.txt",
+    new TextEncoder().encode("proof"),
+    "text/plain",
+  );
+  const base: Protocol.Finding = finding(attachment);
+  const found: Protocol.Finding[] = Array.from(
+    { length: total },
+    (_, index): Protocol.Finding => ({
+      ...base,
+      fingerprint: String(index).repeat(64).slice(0, 64),
+      title: `Failure ${index}`,
+      test: { ...base.test, flow: `flow-${index}` },
+    }),
+  );
+  for (const entry of found)
+    await state.claim(run.id, entry.test.flow, "Flow works");
+
+  return {
+    state,
+    cards,
+    comments,
+    run,
+    found,
+    finish: async (decisions): Promise<Finish.Result> => {
+      const catalog: Protocol.Catalog | null = await state.publication(run.id);
+      if (!catalog) throw new Error("Publication lease missing");
+
+      return Finish.publish(
+        state,
+        run.id,
+        {
+          status: "complete",
+          summary: "Reproduced",
+          report: {},
+          findings: found,
+          evidence: [attachment],
+          verdict: "none",
+          deployment: null,
+          matching: { snapshot: catalog.snapshot, decisions },
+        },
+        cap,
+      );
+    },
+  };
+};
+const fresh = (
+  entry: Protocol.Finding,
+): Protocol.Matching["decisions"][number] => ({
+  fingerprint: entry.fingerprint,
+  verdict: "new",
+  target: null,
+  sameAs: null,
+  reason: "No match",
+});
+
+test("publication creates no cards beyond the cap", async () => {
+  const { state, cards, run, found, finish } = await cohort(3, 4);
+  cards.set(10, { ...card(10, ACTIVE), tags: "qa,project:sample" });
+
+  const published: Finish.Result = await finish(found.map(fresh));
+
+  expect(published.created).toHaveLength(2);
+  expect(published.skipped).toEqual(
+    found.slice(2).map((entry): string => entry.fingerprint),
+  );
+  expect(cards.size).toBe(3);
+  const saved = JSON.parse(
+    state.db
+      .query<{ report: string }, [string]>(
+        "SELECT report FROM qa_runs WHERE id=?",
+      )
+      .get(run.id)?.report ?? "{}",
+  ) as { skipped: { reason: string; findings: Protocol.Finding[] } };
+  expect(saved.skipped.reason).toBe(Protocol.CAP_REASON);
+  expect(saved.skipped.findings.map((entry): string => entry.title)).toEqual([
+    "Failure 2",
+    "Failure 3",
+  ]);
+  expect((await state.state("sample")).open).toBe(3);
+  expect(state.run(run.id).status).toBe("complete");
+});
+
+test("publication at the cap still adds evidence to matched cards", async () => {
+  const { state, cards, comments, found, finish } = await cohort(1, 2);
+  cards.set(10, { ...card(10, ACTIVE), tags: "qa,project:sample" });
+  cards.set(11, card(11, ACTIVE));
+
+  const published: Finish.Result = await finish([
+    { ...fresh(found[0]), verdict: "existing", target: 11 },
+    fresh(found[1]),
+  ]);
+
+  expect(published.created).toEqual([]);
+  expect(published.cards).toEqual([11]);
+  expect(published.skipped).toEqual([found[1].fingerprint]);
+  expect(comments.get(11)?.at(-1)).toContain("adds supporting evidence");
+  expect(state.finding(11)?.fingerprint).toBe(found[0].fingerprint);
 });

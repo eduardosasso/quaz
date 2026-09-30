@@ -67,7 +67,7 @@ Tags are user-visible labels; they are not concurrency locks.
 
 Final comparison includes active, completed, and archived cards, including manual cards without QA tags.
 Unlabelled cards belong to the selected board context; `project:<id>` labels exclude other projects.
-The catalog includes full titles, descriptions, checklists, tags, and comments. Oversized catalogs stop the run instead of hiding issues.
+The catalog lists each card by id, version, title, a truncated description summary, tags, status, and fingerprints; it omits checklists and comments. Oversized catalogs stop the run instead of hiding issues.
 The catalog size and publication lease are bounded by constants in `src/qa_protocol.ts`.
 Recovery can renew a lease only when the original catalog still matches. Changed or uncertain comparisons produce a partial run.
 Such runs retain findings and evidence in their local run report, with `needs-attention`, and create no issue cards.
@@ -132,6 +132,7 @@ bun --no-env-file run qa:image --tag overdew-qa:local
 Use `scripts/qa/controller.json` as the configuration. `parallel` sets capacity from one to ten.
 `mode` accepts `auto`, `discover`, `verify`, or `smoke`. `auto` verifies eligible tickets before discovery.
 `intervalSeconds` controls repeat discovery and verification checks. `pollSeconds` controls idle polling.
+`cap` (default 20) limits open QA cards. At the cap the controller schedules no discovery and publication creates no new cards; verification continues.
 `retrySeconds` and `attempts` bound failure retries. `runs` limits a local trial; zero keeps the controller running.
 Polling uses no model calls. Every actual review retains the existing bounded browser budget.
 

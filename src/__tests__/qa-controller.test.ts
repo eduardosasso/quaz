@@ -71,6 +71,7 @@ const state = (changes: Partial<Protocol.State> = {}): Protocol.State => ({
   runs: [],
   tickets: [],
   flows: [],
+  open: 0,
   ...changes,
 });
 const settings = (
@@ -190,6 +191,41 @@ describe("QA controller scheduling", (): void => {
       "empty",
     ]);
   });
+  test("cap defaults to the configured limit and rejects zero", (): void => {
+    expect(settings().cap).toBe(CONFIG.controller.cap);
+    expect(settings({ cap: 5 }).cap).toBe(5);
+    expect((): unknown => settings({ cap: 0 })).toThrow();
+  });
+  test("discover pauses at the open card cap", (): void => {
+    const cap: number = settings().cap;
+    expect(plans(state({ open: cap }))).toEqual([]);
+    expect(plans(state({ open: cap + 5 }))).toEqual([]);
+    expect(plans(state({ open: 3 }), { cap: 3 })).toEqual([]);
+    expect(plans(state({ open: cap }), { mode: "discover" })).toEqual([]);
+    expect(
+      plans(state({ open: cap }), { mode: "smoke" }).every(
+        (job): boolean => job.mode === "smoke",
+      ),
+    ).toBe(true);
+  });
+  test("verify still runs at the cap", (): void => {
+    const cap: number = settings().cap;
+    const tickets: Protocol.Ticket[] = [ticket(2), ticket(3)];
+
+    expect(plans(state({ open: cap, tickets }), { parallel: 3 })).toEqual([
+      { mode: "verify", scenario: "empty", ticket: 2 },
+      { mode: "verify", scenario: "empty", ticket: 3 },
+    ]);
+    expect(
+      plans(state({ open: cap, tickets }), { mode: "verify", parallel: 3 }),
+    ).toHaveLength(2);
+  });
+  test("discover resumes below the cap", (): void => {
+    const cap: number = settings().cap;
+    expect(plans(state({ open: cap - 1 }))).toHaveLength(2);
+    expect(plans(state({ open: 0 }), { cap: 1 })).toHaveLength(2);
+    expect(plans(state({ open: 3 }), { cap: 4 })).toHaveLength(2);
+  });
   test("explicit modes remain independent", (): void => {
     expect(plans(state(), { mode: "verify" })).toEqual([]);
     expect(
@@ -296,6 +332,42 @@ describe("QA controller execution", (): void => {
     ).rejects.toThrow("Offline");
     expect(polls).toBe(2);
     expect(executions).toBe(0);
+  });
+  test("pause is logged once", async (): Promise<void> => {
+    const stop = new AbortController();
+    const cap: number = settings().cap;
+    const opens: number[] = [cap, cap + 1, cap, cap - 1, cap - 2, cap - 1];
+    const events: Record<string, unknown>[] = [];
+    let polls: number = 0;
+    await Controller.loop(
+      settings({ parallel: 1 }),
+      PROJECT,
+      REVISION,
+      stop.signal,
+      {
+        revision: async (): Promise<string> => REVISION,
+        state: async (): Promise<Protocol.State> =>
+          state({ open: opens[Math.min(polls, opens.length - 1)] }),
+        recover: async (): Promise<void> => {},
+        now: (): number => NOW,
+        wait: async (): Promise<void> => {
+          if (++polls >= opens.length) stop.abort();
+        },
+        log: (event: Record<string, unknown>): void => {
+          events.push(event);
+        },
+        execute: async (): Promise<void> => {},
+      },
+    );
+    const named = (name: string): Record<string, unknown>[] =>
+      events.filter((event): boolean => event.event === name);
+    expect(named("discover-paused")).toEqual([
+      { event: "discover-paused", open: cap, cap },
+    ]);
+    expect(named("discover-resumed")).toEqual([
+      { event: "discover-resumed", open: cap - 1, cap },
+    ]);
+    expect(named("start").length).toBeGreaterThan(0);
   });
   test("stop waits for active workers and launches no replacement", async (): Promise<void> => {
     const stop = new AbortController();

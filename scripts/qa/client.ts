@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
+import CONFIG from "@qa/config.json";
 import { z } from "zod";
 import * as Adapter from "@/adapters/overdew";
 import * as Finish from "@/finish";
@@ -278,6 +279,7 @@ export const open = async (
   token: string,
   project: string,
   authority?: Tracker.Authority,
+  cap: number = CONFIG.controller.cap,
 ): Promise<Client> => {
   const selected: string = Protocol.key.parse(project);
   const file: string =
@@ -371,6 +373,7 @@ export const open = async (
           state,
           finish[1],
           Protocol.finish.parse(body),
+          cap,
         );
       else if (method === "GET" && run) result = state.run(run[1]);
       else
