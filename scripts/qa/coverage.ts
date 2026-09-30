@@ -3,6 +3,7 @@ import {
   type Catalog,
   catalog as catalogSchema,
   type Flow,
+  REQUEST_MS,
 } from "@/qa_protocol";
 
 const request = async <T>(path: string, body?: unknown): Promise<T> => {
@@ -20,7 +21,7 @@ const request = async <T>(path: string, body?: unknown): Promise<T> => {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: "error",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(REQUEST_MS),
     });
   } catch (error: unknown) {
     throw new Error(`QA coverage ${path} failed: ${ErrorName.describe(error)}`);
