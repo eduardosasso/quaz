@@ -24,7 +24,7 @@ for (const scenario of ["empty", "typical", "busy"] as const) {
       "bun",
       values.image,
       "--no-env-file",
-      "/quaz/examples/overdew/probe.ts",
+      "/quaz/projects/overdew/probe.ts",
     ],
     { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 60_000 },
   );

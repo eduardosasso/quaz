@@ -5,5 +5,5 @@
     "test": "bun run test"
   },
   "risky": ["Dockerfile.release", "scripts/release.ts", ".github/workflows"],
-  "ship": { "command": "QUAZ_PROJECT_ID=overdew bun ship", "mode": "auto" }
+  "ship": { "command": "bun ship", "mode": "auto" }
 }

@@ -26,6 +26,7 @@ const SOURCES: string[] = [
   "src",
   "scripts",
   "examples",
+  "projects",
 ];
 const files = (path: string): string[] =>
   statSync(path).isDirectory()

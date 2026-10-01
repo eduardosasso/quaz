@@ -59,6 +59,18 @@ export const schema = z
   })
   .strict();
 export type Settings = z.infer<typeof schema>;
+const embedded = z
+  .object({ controller: z.record(z.string(), z.unknown()) })
+  .loose();
+export const load = async (file: string): Promise<Settings> => {
+  const path: string = resolve(file);
+  const config: unknown = JSON.parse(await readFile(path, "utf8"));
+  const project = embedded.safeParse(config);
+
+  return schema.parse(
+    project.success ? { ...project.data.controller, project: path } : config,
+  );
+};
 export type Job = { mode: Protocol.Mode; scenario: string; ticket?: number };
 export type Active = { job: Job; promise: Promise<void> };
 export class Halt extends Error {
@@ -583,9 +595,7 @@ if (import.meta.main) {
         config: { type: "string", default: "/config/controller.json" },
       },
     });
-    const settings: Settings = schema.parse(
-      JSON.parse(await readFile(resolve(values.config), "utf8")),
-    );
+    const settings: Settings = await load(values.config);
     await supervise(
       (): Promise<void> => start(settings, stopping.signal),
       settings.retrySeconds,
