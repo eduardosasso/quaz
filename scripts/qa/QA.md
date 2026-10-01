@@ -114,7 +114,20 @@ Confirm a candidate only when its expected behavior follows from the user goal o
 File one candidate per root cause. When the same defect affects several controls or screens, file one candidate that lists every affected place in its steps and actual result.
 A defect with the same root cause as an issue in the existing catalog is that card's match, not a new candidate.
 Do not file pure visual preferences, or findings whose own evidence says the behavior may be intentional.
-Clipping or truncation seen only under the 200% text-size check (`text-size-200`) is not a defect unless content becomes unreadable or a control becomes unusable.
+
+File only defects that an ordinary user hits at default settings on a phone or desktop:
+- Broken behavior: crashes, blank screens, wrong results, lost or duplicated data, and stuck navigation.
+- Visible layout breaks at default text size in portrait or desktop widths: overlap, clipping, or a control that cannot be reached.
+- A touch control that is hidden but still acts on a tap, or a primary action that touch users cannot find.
+
+Never file these, even when a required check measures them. Record them in the check ledger only:
+- Anything seen only under the 200% text-size check (`text-size-200`), reduced motion, or 844×390 landscape.
+- Keyboard focus order, focus return, and focus visibility.
+- Accessible names, roles, and selected-state attributes for assistive technology.
+- Contrast ratios and hit-area sizes.
+- Button style tiers and other treatment differences between working controls.
+- Injected request failures that only roll back an optimistic change without a message. File a failure only when it loses typed input, blanks the app, or reports success for a failed save.
+- Rapid repeat clicks or taps, unless they create duplicate saved data.
 
 ## Independent validator
 
@@ -122,6 +135,7 @@ Repeat the supplied candidate steps in a fresh mobile browser context. Do not di
 Discovery validation starts in a separate app database and login, seeded with the original scenario.
 The reviewer's changes do not carry over. Repeat setup actions from the entry page before checking the result.
 Check every candidate's acceptance criteria against its steps and evidence. Reject extra requirements that those steps cannot test.
+For discovery, reject any candidate outside the candidate scope, and name the excluded category.
 For verification, the old defect disappearing supports a pass. Test each saved acceptance check against the deployed app.
 If a check covers failure handling, find and trigger the real failure boundary in a fresh context. A local action can fail in browser storage or another client dependency without a network request. Restore the context afterward. Mark the check untested only when you cannot establish its boundary.
 For a design candidate, independently compare the peer treatment or supporting composition using the shared design guidance. Check the control roles through interaction. A visible difference alone is insufficient, but a supported design concern does not require broken functionality. Explain whether the comparison, improvement, and tradeoff follow from the observed task. Keep unverified intent or behavior inconclusive.
