@@ -119,6 +119,7 @@ File only defects that an ordinary user hits at default settings on a phone or d
 - Broken behavior: crashes, blank screens, wrong results, lost or duplicated data, and stuck navigation.
 - Visible layout breaks at default text size in portrait or desktop widths: overlap, clipping, or a control that cannot be reached.
 - A touch control that is hidden but still acts on a tap, or a primary action that touch users cannot find.
+- Rapid repeat clicks or taps that run an action twice, show a false error, or leave the wrong state.
 
 Never file these, even when a required check measures them. Record them in the check ledger only:
 - Anything seen only under the 200% text-size check (`text-size-200`), reduced motion, or 844×390 landscape.
@@ -127,7 +128,6 @@ Never file these, even when a required check measures them. Record them in the c
 - Contrast ratios and hit-area sizes.
 - Style tiers, emphasis, and other treatment differences between controls that users can find and use.
 - Injected request failures that only roll back an optimistic change without a message. File a failure only when it loses typed input, blanks the app, or reports success for a failed save.
-- Rapid repeat clicks or taps, unless they create duplicate saved data.
 
 ## Independent validator
 
