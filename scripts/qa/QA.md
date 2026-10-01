@@ -46,7 +46,7 @@ Use browser observations and DOM measurements to test a specific suspicion withi
 
 Apply the shared design guidance to the same selected flow. Before failure injection or technical inspection, inspect its ordinary state and capture an inline screenshot. Inventory all visible controls across the content and action areas in `design.controls`, with their purpose, location, and treatment. Group controls by the decision the user makes, not by current visual similarity. Open unfamiliar controls to establish their role, then restore the ordinary state.
 Record explicit cross-group comparisons in `design.comparisons`, referencing inventoried control names. Compare exposure, space, emphasis, and access patterns for equivalent task roles. Explain observed exceptions and the strongest task-based reason for them. If there are no peers, use an empty comparisons array and explain why in noPeers; otherwise noPeers is null. Assess the whole supporting composition separately, including one plausible alternative and its tradeoff. The current arrangement may be better. Keep unknown roles and unverified intent explicit.
-Use the polish and layout notes to summarize these judgments. Either judgment may pass. A working flow can still have a supported design concern. Cite the ordinary-state screenshot and relevant interactions in design.evidence. Each concern verdict requires a candidateId referencing its supported candidate. Coherent or unknown judgments use null. A concern buried only in a guide note never becomes a ticket.
+Use the polish and layout notes to summarize these judgments. Either judgment may pass. A working flow can still have a supported design concern. Cite the ordinary-state screenshot and relevant interactions in design.evidence. Use the concern verdict only for a design problem inside the candidate scope, such as a main action that users cannot find or reach, or controls that overlap. Each concern verdict requires a candidateId referencing its supported candidate. Record other treatment differences in the polish or layout note, and use the coherent verdict. Coherent or unknown judgments use null. A concern buried only in a guide note never becomes a ticket.
 Inspect unfamiliar controls before asserting their role. Follow up on uncertain behavior within the selected flow. If it remains unknown, record the concern and the missing check in limitations; do not publish it as a confirmed candidate.
 For a design candidate, put the visible comparison in actual, the supported improvement and tradeoff in expected, and the likely user effect and strongest alternative explanation in impact. Separate observed facts from inferred effects. Keep acceptance criteria tied to the reproduced state and design principle; do not require one exact redesign.
 
@@ -125,7 +125,7 @@ Never file these, even when a required check measures them. Record them in the c
 - Keyboard focus order, focus return, and focus visibility.
 - Accessible names, roles, and selected-state attributes for assistive technology.
 - Contrast ratios and hit-area sizes.
-- Button style tiers and other treatment differences between working controls.
+- Style tiers, emphasis, and other treatment differences between controls that users can find and use.
 - Injected request failures that only roll back an optimistic change without a message. File a failure only when it loses typed input, blanks the app, or reports success for a failed save.
 - Rapid repeat clicks or taps, unless they create duplicate saved data.
 
@@ -138,7 +138,7 @@ Check every candidate's acceptance criteria against its steps and evidence. Reje
 For discovery, reject any candidate outside the candidate scope, and name the excluded category.
 For verification, the old defect disappearing supports a pass. Test each saved acceptance check against the deployed app.
 If a check covers failure handling, find and trigger the real failure boundary in a fresh context. A local action can fail in browser storage or another client dependency without a network request. Restore the context afterward. Mark the check untested only when you cannot establish its boundary.
-For a design candidate, independently compare the peer treatment or supporting composition using the shared design guidance. Check the control roles through interaction. A visible difference alone is insufficient, but a supported design concern does not require broken functionality. Explain whether the comparison, improvement, and tradeoff follow from the observed task. Keep unverified intent or behavior inconclusive.
+For a design candidate, independently compare the peer treatment or supporting composition using the shared design guidance. Check the control roles through interaction. A visible difference alone is insufficient. Confirm a design candidate only when users cannot find or reach the affected control, or controls overlap. Explain whether the comparison, improvement, and tradeoff follow from the observed task. Keep unverified intent or behavior inconclusive.
 Return confirmed, rejected, or inconclusive per candidate. Confirmed needs your own screenshot returned as an inline image.
 Include your own screenshot path in the top-level `evidence` array and each confirmed candidate's `evidence` array.
 If there are no candidates, independently repeat the one core case and capture its result.
