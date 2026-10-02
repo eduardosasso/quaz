@@ -48,7 +48,7 @@ Quaz stores each new card ID before later API writes. The Overdew adapter uses a
 
 ## Reviews and image releases
 
-Pull requests run lint, type checks, tests, and the shared Claude Code Review workflow. Merv reads those checks and can review the pull request when its GitHub App and repository allowlist include Quaz. `.merv.json` defines the same checks for Merv. It has no ship command.
+Pull requests run lint, type checks, tests, and the shared Claude Code Review workflow. Merv reads those checks and can review the pull request when its GitHub App and repository allowlist include Quaz. `.merv.json` defines the same checks for Merv. Its ship command deploys the Overdew controller to omarchy after each merge to `main`. Merv runs `QUAZ_PROJECT_ID=overdew bun ship` in a ship job. The job gets `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` from Merv's 1Password Environment. `scripts/deploy.sh` reads the Quaz service token from omarchy and the registry token from Quaz's Environment.
 
 On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:sha-<full-commit-sha>`. Main must require passing validation, Claude review, and Merv checks before this workflow is merged. The image records the full source SHA and package version in OCI labels. Publication does not start Quaz or install a QA schedule.
 
