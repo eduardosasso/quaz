@@ -1,3 +1,4 @@
+import * as Usage from "@qa/usage";
 import * as ErrorName from "@/error";
 import {
   type Catalog,
@@ -33,6 +34,8 @@ const request = async <T>(path: string, body?: unknown): Promise<T> => {
     throw new Error(`QA coverage ${path} failed: ${ErrorName.describe(error)}`);
   }
 };
+export const budget = async (reading?: Usage.Report): Promise<Usage.Control> =>
+  Usage.control.parse(await request<unknown>("/usage", reading));
 export const catalog = async (): Promise<Catalog> =>
   catalogSchema.parse(await request<unknown>("/catalog"));
 export const publication = async (): Promise<Catalog | null> =>

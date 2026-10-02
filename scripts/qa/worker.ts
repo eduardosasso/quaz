@@ -18,6 +18,7 @@ import * as Inspect from "@qa/inspect";
 import * as Project from "@qa/project";
 import * as Provider from "@qa/provider";
 import * as Review from "@qa/review";
+import * as Usage from "@qa/usage";
 import { chromium } from "playwright";
 import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
@@ -131,6 +132,40 @@ const completion = (child: ChildProcess, seconds: number): Promise<number> =>
       resolve(code ?? 1);
     });
   });
+
+const allowance = async (): Promise<boolean> => {
+  const result: Usage.Control = await Coverage.budget();
+  if (!result.allowed) throw new Error(`QA paused: ${result.reason}`);
+
+  return result.enabled;
+};
+export const guided = async (
+  child: ChildProcess,
+  seconds: number,
+  raw: string,
+  enabled: boolean,
+): Promise<number> => {
+  const finished: Promise<number> = completion(child, seconds);
+  if (!enabled) return finished;
+  const watched: Promise<void> = Usage.watch(raw, finished, Coverage.budget);
+  try {
+    const [code] = await Promise.all([finished, watched]);
+
+    return code;
+  } catch (error: unknown) {
+    console.error(
+      JSON.stringify({ event: "usage-phase-stopped", error: String(error) }),
+    );
+    stop(child);
+    const force: ReturnType<typeof setTimeout> = setTimeout(
+      (): void => stop(child, "SIGKILL"),
+      STOP_MS,
+    );
+    await Promise.allSettled([finished, watched]);
+    clearTimeout(force);
+    throw error;
+  }
+};
 
 const ready = async (child?: ChildProcess): Promise<void> => {
   const deadline: number = Date.now() + BOOT_SECONDS * MILLISECONDS;
@@ -393,6 +428,7 @@ const phase = async (
     skill: CONFIG.controller.skill,
     model: options.model,
   });
+  const protectedUsage: boolean = await allowance();
   const child: ChildProcess = launch(
     invocation.command,
     invocation.args,
@@ -411,9 +447,11 @@ const phase = async (
   child.stdin?.end(instruction);
   let code: number;
   try {
-    code = await completion(
+    code = await guided(
       child,
       Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
+      join("/tmp/qa-raw", name, "events.raw.jsonl"),
+      protectedUsage,
     );
   } finally {
     await Provider.scrub(
@@ -501,6 +539,7 @@ export const compare = async (
     token: CREDENTIAL,
     model,
   });
+  const protectedUsage: boolean = await allowance();
   const child: ChildProcess = launch(
     invocation.command,
     invocation.args,
@@ -511,9 +550,11 @@ export const compare = async (
   child.stdin?.end(instruction);
   let code: number;
   try {
-    code = await completion(
+    code = await guided(
       child,
       Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
+      "/tmp/qa-raw/matching/events.raw.jsonl",
+      protectedUsage,
     );
   } finally {
     await Provider.scrub(
@@ -628,6 +669,7 @@ const audit = async (
         token: CREDENTIAL,
         model: options.model,
       });
+      const protectedUsage: boolean = await allowance();
       const child: ChildProcess = launch(
         invocation.command,
         invocation.args,
@@ -641,9 +683,11 @@ const audit = async (
       );
       let code: number;
       try {
-        code = await completion(
+        code = await guided(
           child,
           Math.max(1, Math.floor((deadline - Date.now()) / MILLISECONDS)),
+          `${raw}.jsonl`,
+          protectedUsage,
         );
       } finally {
         await Provider.scrub(`${raw}.jsonl`, CREDENTIAL);

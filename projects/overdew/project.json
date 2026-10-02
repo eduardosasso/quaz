@@ -27,6 +27,7 @@
       "board": "eduardosasso/overdew"
     },
     "mode": "auto",
+    "usage": true,
     "parallel": 2,
     "intervalSeconds": 300
   }

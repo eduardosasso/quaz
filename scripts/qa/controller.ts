@@ -16,6 +16,7 @@ import * as Docker from "@qa/docker";
 import * as Project from "@qa/project";
 import * as Runner from "@qa/run";
 import * as Source from "@qa/source";
+import * as Usage from "@qa/usage";
 import { z } from "zod";
 import * as Storage from "@/local_storage_native";
 import * as Protocol from "@/qa_protocol";
@@ -56,6 +57,7 @@ export const schema = z
     provider: z.enum(["claude"]).default("claude"),
     model: z.string().optional(),
     attention: z.string().optional(),
+    usage: z.boolean().default(false),
   })
   .strict();
 export type Settings = z.infer<typeof schema>;
@@ -216,6 +218,7 @@ export const recovery = async (
     throw new Error(`QA recovery needs attention: ${errors.join("; ")}`);
 };
 export type Dependencies = Backoff.Pacing & {
+  usage?: Usage.Store;
   revision: () => Promise<string>;
   state: (revision: string) => Promise<Protocol.State>;
   execute: (job: Job, revision: string, signal: AbortSignal) => Promise<void>;
@@ -306,6 +309,8 @@ export const loop = async (
   signal: AbortSignal,
   dependencies: Dependencies,
 ): Promise<void> => {
+  if (settings.usage && settings.mode !== "smoke" && !dependencies.usage)
+    throw new Halt("Usage protection requires a persistent usage store");
   let revision: string = initial;
   const active: Set<Active> = new Set();
   let launched: number = 0;
@@ -351,6 +356,7 @@ export const loop = async (
           );
           holding = full;
         }
+        if (!active.size) await dependencies.usage?.ready();
         const remaining: number = settings.runs
           ? settings.runs - launched
           : settings.parallel;
@@ -366,6 +372,9 @@ export const loop = async (
                 dependencies.now(),
               ).slice(0, remaining);
         for (const job of jobs) {
+          if (dependencies.usage && !(await dependencies.usage.ready()).allowed)
+            break;
+          const usageId: string | undefined = await dependencies.usage?.begin();
           const selected: string = revision;
           launched++;
           const item: Active = { job, promise: Promise.resolve() };
@@ -405,8 +414,12 @@ export const loop = async (
                 error: String(error),
               });
             })
-            .finally((): void => {
-              active.delete(item);
+            .finally(async (): Promise<void> => {
+              try {
+                if (usageId) await dependencies.usage?.finish(usageId);
+              } finally {
+                active.delete(item);
+              }
             });
         }
         errors = 0;
@@ -522,6 +535,16 @@ export const start = async (
     connected = true;
     const log = (event: Record<string, unknown>): void =>
       console.log(JSON.stringify(event));
+    const usage: Usage.Store | undefined =
+      settings.usage && settings.mode !== "smoke"
+        ? await Usage.connect(
+            join(runtime.directory, "usage.json"),
+            CONFIG.usage,
+            log,
+            (): Promise<Usage.Report> =>
+              Usage.probe(process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "", signal),
+          )
+        : undefined;
     const latest = follow(project, settings.pollSeconds, signal, {
       wait: Backoff.wait,
       log,
@@ -536,6 +559,7 @@ export const start = async (
       cap: settings.cap,
     });
     await loop(settings, project, initial, signal, {
+      usage,
       revision: latest,
       state: async (revision: string): Promise<Protocol.State> => {
         const state: Protocol.State = await client.request(
@@ -554,6 +578,7 @@ export const start = async (
         await Runner.run(
           {
             ...input,
+            usage,
             mode: job.mode,
             scenarios: [job.scenario],
             tickets: job.ticket ? [job.ticket] : undefined,

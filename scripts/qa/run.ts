@@ -19,6 +19,7 @@ import * as Image from "@qa/image";
 import * as Lifecycle from "@qa/lifecycle";
 import * as Project from "@qa/project";
 import * as Provider from "@qa/provider";
+import * as Usage from "@qa/usage";
 import { z } from "zod";
 import * as Protocol from "@/qa_protocol";
 
@@ -27,6 +28,7 @@ const MILLISECONDS: number = 1000;
 // Outlasts the worker's request timeout, so a slow bridge call ends in that timeout instead of a closed socket.
 const BRIDGE_IDLE_SECONDS: number = (2 * Protocol.REQUEST_MS) / MILLISECONDS;
 export type Options = {
+  usage?: Usage.Store;
   mode: Protocol.Mode;
   testers: number;
   scenarios: string[];
@@ -523,6 +525,17 @@ export const run = async (
         if (!authority) return new Response("Unauthorized", { status: 401 });
         const path: string = new URL(request.url).pathname;
         try {
+          if (path === "/usage" && ["GET", "POST"].includes(request.method)) {
+            const reading: Usage.Report | undefined =
+              request.method === "POST"
+                ? Usage.report.parse(await request.json())
+                : undefined;
+            const result: Usage.Decision = input.usage
+              ? await input.usage.update(reading)
+              : { allowed: true, reason: "usage-disabled" };
+
+            return Response.json({ ...result, enabled: !!input.usage });
+          }
           if (path === "/catalog" && request.method === "GET")
             return Response.json(
               await client.request(
@@ -893,8 +906,11 @@ export const run = async (
             if (!conclusion) throw new Error("QA run has no outcome");
             if (conclusion.status === Protocol.INTERRUPTED)
               throw new Interrupted(conclusion.summary);
-            if (conclusion.status === "failed")
+            if (conclusion.status === "failed") {
+              if (input.usage && !(await input.usage.update()).allowed)
+                throw new Interrupted(conclusion.summary);
               throw new Error(conclusion.summary);
+            }
             await rm(directory, { recursive: true });
             return `${input.url}/${input.board} (run ${record.id})`;
           },
