@@ -132,11 +132,10 @@ export const observe = (
     const current: z.infer<typeof window> = currentSnapshot[name];
     const prior: z.infer<typeof window> | undefined = previous?.snapshot[name];
     if (!charged) continue;
-    const amount: number = Math.max(
-      0,
-      current.utilization -
-        (prior?.resetsAt === current.resetsAt ? prior.utilization : 0),
-    );
+    const amount: number =
+      prior && prior.resetsAt !== current.resetsAt
+        ? 0
+        : Math.max(0, current.utilization - (prior?.utilization ?? 0));
     const stored: z.infer<typeof charge> | undefined = charged.charges.find(
       (item): boolean =>
         item.window === name && item.reset === current.resetsAt,

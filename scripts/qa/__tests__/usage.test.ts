@@ -153,6 +153,18 @@ test("delayed final usage is charged to the finished run", (): void => {
   expect(value.runs[0].charges[0].amount).toBeCloseTo(0.05);
 });
 
+test("a window reset is never charged to the active run", (): void => {
+  const value: Usage.Ledger = state();
+  value.runs.push({ id: "active", start: NOW, end: null, charges: [] });
+  const reset: Usage.Snapshot = snapshot(0.08, 0.1);
+  reset.five_hour.resetsAt += 5 * 3600;
+  Usage.observe(value, { snapshot: reset }, NOW + HOUR, SETTINGS);
+  const five = value.runs[0].charges.find(
+    (item): boolean => item.window === "five_hour",
+  );
+  expect(five?.amount).toBe(0);
+});
+
 test("share and daily limits hold independently of personal reserve", (): void => {
   const value: Usage.Ledger = state();
   value.runs.push({
