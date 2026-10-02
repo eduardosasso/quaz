@@ -66,6 +66,7 @@ COPY Dockerfile.release ./Dockerfile.release
 COPY src ./src
 COPY scripts ./scripts
 COPY examples ./examples
+COPY projects ./projects
 RUN bun --no-env-file -e 'import("./scripts/qa/inspect.ts").then((module) => { if (typeof module.inspect !== "function") process.exit(1) })'
 RUN mkdir -p /app/uploads
 

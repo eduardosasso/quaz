@@ -1,5 +1,5 @@
 {
-  "exclude": ["node_modules", "artifacts", "examples/overdew/fixture.ts"],
+  "exclude": ["node_modules", "artifacts", "projects/overdew/fixture.ts"],
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
@@ -9,7 +9,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@qa/*": ["./scripts/qa/*"],
-      "@overdew/*": ["./examples/overdew/*"],
+      "@overdew/*": ["./projects/overdew/*"],
       "@release": ["./scripts/release.ts"]
     }
   }

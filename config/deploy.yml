@@ -1,6 +1,5 @@
 <% require "json" -%>
 <% project = ENV.fetch("QUAZ_PROJECT_ID") -%>
-<% directory = "/var/lib/quaz/#{project}" -%>
 <% job = !ENV["MERV_JOB"].to_s.empty? -%>
 <% versions = JSON.parse(File.read("scripts/qa/config.json")) -%>
 <% package = JSON.parse(File.read("package.json")) -%>
@@ -13,7 +12,7 @@ servers:
     hosts:
       - <%= job ? "127.0.0.1" : "omarchy" %>
     proxy: false
-    cmd: controller --config <%= directory %>/controller.json
+    cmd: controller --config /quaz/projects/<%= project %>/project.json
     options:
       cpus: "2"
       memory: 3g
@@ -66,7 +65,6 @@ env:
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock
   - quaz-<%= project %>-state:/qa
-  - <%= directory %>:<%= directory %>:ro
 
 readiness_delay: 10
 deploy_timeout: 60

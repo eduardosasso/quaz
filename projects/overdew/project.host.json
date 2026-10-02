@@ -1,6 +1,6 @@
 {
   "id": "overdew",
-  "root": "/qa/source",
+  "root": "../../../overdew",
   "sources": [
     "package.json",
     "bun.lock",
@@ -12,13 +12,8 @@
     "src",
     "www"
   ],
-  "adapter": "/quaz/examples/overdew/adapter.ts",
+  "adapter": "/quaz/projects/overdew/adapter.ts",
   "context": ["/app/PRODUCT.md", "/app/DESIGN.md"],
   "scenarios": ["empty", "typical", "busy"],
-  "revision": "git",
-  "fetch": true,
-  "deployment": {
-    "url": "https://overdew.app/api/version",
-    "repository": "tedstonne/overdew"
-  }
+  "revision": "source"
 }

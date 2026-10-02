@@ -895,6 +895,44 @@ describe("QA controller supervision", (): void => {
   });
 });
 
+describe("QA controller config file", (): void => {
+  const folders: string[] = [];
+  const write = async (value: unknown): Promise<string> => {
+    const folder: string = await mkdtemp(join(tmpdir(), "quaz-config-"));
+    folders.push(folder);
+    const file: string = join(folder, "config.json");
+    await writeFile(file, JSON.stringify(value));
+
+    return file;
+  };
+  afterAll(async (): Promise<void> => {
+    for (const folder of folders)
+      await rm(folder, { recursive: true, force: true });
+  });
+  test("project file supplies settings and its own path", async (): Promise<void> => {
+    const file: string = await write({
+      ...PROJECT,
+      controller: { mode: "verify", parallel: 3 },
+    });
+    expect(await Controller.load(file)).toEqual(
+      Controller.schema.parse({ project: file, mode: "verify", parallel: 3 }),
+    );
+  });
+  test("project file rejects invalid settings", async (): Promise<void> => {
+    const file: string = await write({
+      ...PROJECT,
+      controller: { parallel: 0 },
+    });
+    await expect(Controller.load(file)).rejects.toThrow();
+  });
+  test("controller file keeps its project path", async (): Promise<void> => {
+    const file: string = await write({ project: PROJECT_FILE, parallel: 2 });
+    expect(await Controller.load(file)).toEqual(
+      Controller.schema.parse({ project: PROJECT_FILE, parallel: 2 }),
+    );
+  });
+});
+
 describe("QA Docker boundary", (): void => {
   const runtime: Docker.Runtime = Docker.runtime({
     Id: "controller",

@@ -23,7 +23,7 @@ bun --no-env-file run qa -- --mode smoke --project /path/to/project.json --outpu
 
 The tracker adapter in `src/adapters/overdew.ts` sends ordinary card API requests to Overdew. It works for every app Quaz tests. Overdew stores the work and does not run the tests. The `Tracker` interface in `src/tracker.ts` defines the required operations.
 
-For example, a Quaz run can test RDLTR and create its finding card in Overdew. Another run can test Neologin or Surrge and use the same tracker adapter. Each tested app needs its own project config and target adapter. `examples/overdew` contains an optional target adapter for testing Overdew itself.
+For example, a Quaz run can test RDLTR and create its finding card in Overdew. Another run can test Neologin or Surrge and use the same tracker adapter. Each tested app needs its own project config and target adapter. `projects/overdew` holds the Overdew project config and an optional target adapter for testing Overdew itself.
 
 One Quaz image runs the controller and every worker. Run the target app separately, then set `revision` to `target` in its project config. Set `deployment.url` to a reachable revision endpoint and `deployment.revision` to its deployed commit. A `GET` request to that endpoint must return the revision in an `x-quaz-revision` header or a JSON `revision` field. Set `settings.origin` to the same origin, with `settings.entry` and `settings.ready` as paths within it. A custom adapter must return that same origin. Quaz checks the revision before, during, and after each run. Quaz does not need the target source or its image.
 Remote targets receive browser measurements without source files. The source detector reports unavailable for these runs.
@@ -48,7 +48,9 @@ Quaz stores each new card ID before later API writes. The Overdew adapter uses a
 
 ## Reviews and image releases
 
-Pull requests run lint, type checks, tests, and the shared Claude Code Review workflow. Merv reads those checks and can review the pull request when its GitHub App and repository allowlist include Quaz. `.merv.json` defines the same checks for Merv. Its ship command deploys the Overdew controller to omarchy after each merge to `main`. Merv runs `QUAZ_PROJECT_ID=overdew bun ship` in a ship job. The job gets `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` from Merv's 1Password Environment. `scripts/deploy.sh` reads the Quaz service token from omarchy and the registry token from Quaz's Environment.
+Pull requests run lint, type checks, tests, and the shared Claude Code Review workflow. Merv reads those checks and can review the pull request when its GitHub App and repository allowlist include Quaz. `.merv.json` defines the same checks for Merv. Its ship command deploys the controllers to omarchy after each merge to `main`. Merv runs `bun ship` in a ship job. `bun ship` deploys one controller for each folder in `projects/`. The image builds and pushes once. The job gets `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` from Merv's 1Password Environment. `scripts/deploy.sh` reads the Quaz service token from omarchy and the registry token from Quaz's Environment.
+
+To add a project, add `projects/<id>/project.json` to the repository. The file holds the project fields and a `controller` key with the controller settings. Add an adapter next to it if the app needs sign-in or seed data. The target app must use `fetch: true` or `revision: target`, because the controller image has no host files. Put secrets, such as `QUAZ_SOURCE_TOKEN_<OWNER>`, in the Quaz 1Password Environment. Merge the change. Merv deploys the new controller. Set `QUAZ_PROJECT_ID` to deploy one project by hand.
 
 On a push to `main`, validation builds and publishes `ghcr.io/eduardosasso/quaz:sha-<full-commit-sha>`. Main must require passing validation, Claude review, and Merv checks before this workflow is merged. The image records the full source SHA and package version in OCI labels. Publication does not start Quaz or install a QA schedule.
 
@@ -88,6 +90,8 @@ docker run --detach --name quaz-controller --restart unless-stopped \
   --env QUAZ_BOOTSTRAP=empty \
   "$image" controller --config "$project_dir/controller.json"
 ```
+
+The `--config` file is a project file with a `controller` key, or a controller file. A controller file holds a `project` path and the controller settings. The command above uses a controller file.
 
 This command starts recurring QA work. The controller retries failures inside the process with backoff, so 1Password loads the Environment once per start. After a failed exit, the entry point waits with backoff before it reads 1Password again. After five failed exits in a row, it logs `controller-halted` and stops reading 1Password until the container is recreated. Each fatal stop logs one `controller-fatal` event. Keep the `unless-stopped` policy: Docker does not restart `on-failure` containers after a host reboot. Use it only after the extraction cutover checks pass. The controller has the Docker socket, so it must run on a trusted Docker host. It gives each worker only private `/qa` run subpaths and a per-run `/credential` token. The worker gets an ephemeral bridge token. It has no Docker socket, tracker token, or 1Password token. Quaz removes the worker and its token file after the run.
 

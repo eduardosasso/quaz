@@ -143,6 +143,7 @@ export const plan = async (override?: Bump): Promise<Plan> => {
     "src",
     "scripts",
     "examples",
+    "projects",
     "docs",
     ".github",
     "Dockerfile",

@@ -15,8 +15,8 @@ The current branch is a cutover candidate. The gaps below keep Overdew PR #208 i
 | `scripts/qa/fixtures/verification/{01.png,02.png,provenance.json,suite.json}` | Same paths | Moved unchanged. |
 | `scripts/qa/image.ts` | Same path | Adapted for a separate Quaz build context. |
 | `scripts/qa/Dockerfile`, `Dockerfile.dockerignore` | Root `Dockerfile`, `.dockerignore` | Separate Quaz and app build contexts. The merged Quaz image runs a generic target smoke test and all three disposable Overdew probes. |
-| `scripts/qa/project.ts`, `project.json`, `overdew.ts`, `fixture.ts` | `scripts/qa/project.ts`, `command.ts`, `examples/project.json`, `examples/overdew/adapter.ts`, `fixture.ts`, and project JSON files | The project contract is generic. The optional Overdew target adapter prepares disposable login and empty, typical, busy fixtures. |
-| `scripts/qa/local.ts`, `proof.ts`, `controller-proof.ts`, `controller.json` | `examples/overdew/probe.ts`, `proof.ts`, `controller.json`; guided Overdew proof pending | Generic target smoke, guided review, report publication, and controller restart pass in containers. Full Overdew controller smoke passes empty, typical, and busy. |
+| `scripts/qa/project.ts`, `project.json`, `overdew.ts`, `fixture.ts` | `scripts/qa/project.ts`, `command.ts`, `examples/project.json`, `projects/overdew/adapter.ts`, `fixture.ts`, and project JSON files | The project contract is generic. The optional Overdew target adapter prepares disposable login and empty, typical, busy fixtures. |
+| `scripts/qa/local.ts`, `proof.ts`, `controller-proof.ts`, `controller.json` | `projects/overdew/probe.ts`, `proof.ts`, `project.json`; guided Overdew proof pending | Generic target smoke, guided review, report publication, and controller restart pass in containers. Full Overdew controller smoke passes empty, typical, and busy. |
 | `docs/qa.md` | `docs/legacy-contract.md`, this map, `README.md` | Original acceptance contract retained. Current command documentation needs completion. |
 | `src/__tests__/qa-{controller,duplicates,eval-model,eval-split,eval,inspect.integration,orchestration,review,runner,verify-eval}.test.ts` | Same paths | Moved or adapted; tests pass. |
 | `src/__tests__/fixtures/qa-target.ts` | Same path | Moved sample target. |
@@ -37,7 +37,7 @@ No production migration or controller installation has run from this branch.
 
 ## App and tracker boundary
 
-Quaz can test any app with a project config and a target adapter. The target adapter starts a disposable app revision and prepares test data. `examples/overdew` is one optional target adapter; RDLTR, Neologin, and Surrge can provide their own.
+Quaz can test any app with a project config and a target adapter. The target adapter starts a disposable app revision and prepares test data. `projects/overdew` is one optional target adapter; RDLTR, Neologin, and Surrge can provide their own.
 
 The `Tracker` interface stores run and finding cards, comments, and evidence. `src/adapters/overdew.ts` translates that interface to Overdew's generic HTTP API. This adapter is independent of the tested app. The same Overdew board can track work from several projects through `project:*` labels and machine records. Overdew does not interpret Quaz modes or QA labels.
 

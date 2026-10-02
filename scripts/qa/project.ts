@@ -73,6 +73,7 @@ export const schema = z
           .optional(),
       })
       .optional(),
+    controller: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
   .refine(
