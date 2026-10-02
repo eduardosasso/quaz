@@ -9,6 +9,15 @@ const NOW: number = 1_800_000_000_000;
 const HOUR: number = 3_600_000;
 const DAY: number = 24 * HOUR;
 const SETTINGS: Usage.Settings = CONFIG.usage;
+const INVALID: { name: string; info: unknown }[] = [
+  { name: "missing metadata", info: undefined },
+  { name: "null metadata", info: null },
+  { name: "text metadata", info: "unavailable" },
+  { name: "missing status", info: {} },
+  { name: "unknown status", info: { status: "unknown" } },
+  { name: "invalid reset", info: { status: "allowed", resetsAt: "later" } },
+  { name: "invalid overage", info: { status: "allowed", isUsingOverage: 1 } },
+];
 const snapshot = (five: number = 0.1, week: number = 0.1): Usage.Snapshot => ({
   five_hour: { utilization: five, resetsAt: (NOW + 5 * HOUR) / 1000 },
   seven_day: { utilization: week, resetsAt: (NOW + 7 * DAY) / 1000 },
@@ -56,6 +65,12 @@ test("reads real subscription metadata and ignores model text", (): void => {
       NOW,
     )?.blockedUntil,
   ).toBe(NOW + DAY);
+});
+
+test.each(INVALID)("$name starts cooldown", ({ info }): void => {
+  expect(
+    Usage.event({ type: "rate_limit_event", rate_limit_info: info }, NOW),
+  ).toEqual({ blockedUntil: NOW + SETTINGS.probeSeconds * 1000 });
 });
 
 test("missing old future and expired readings stop runs", (): void => {
@@ -350,6 +365,49 @@ test("missing phase metadata pauses the following work", async (): Promise<void>
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test.each(INVALID)(
+  "$name persists stream cooldown",
+  async ({ info }): Promise<void> => {
+    const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));
+    const path: string = join(root, "events.jsonl");
+    const ledger: string = join(root, "usage.json");
+    const probe = async (): Promise<Usage.Report> => ({ snapshot: snapshot() });
+    try {
+      const store: Usage.Store = await Usage.connect(
+        ledger,
+        SETTINGS,
+        (): void => {},
+        probe,
+      );
+      expect((await store.ready()).allowed).toBe(true);
+      const id: string = await store.begin();
+      await writeFile(
+        path,
+        `${JSON.stringify({ type: "rate_limit_event", rate_limit_info: info })}\n`,
+      );
+      await expect(
+        Usage.watch(path, Promise.resolve(), store.update),
+      ).rejects.toThrow("usage-cooldown");
+      await store.finish(id);
+      const saved: Usage.Ledger = JSON.parse(await readFile(ledger, "utf8"));
+      expect(saved.blockedUntil).toBeGreaterThan(Date.now());
+      const restarted: Usage.Store = await Usage.connect(
+        ledger,
+        SETTINGS,
+        (): void => {},
+        probe,
+      );
+      expect(await restarted.ready()).toEqual({
+        allowed: false,
+        reason: "usage-cooldown",
+      });
+      await expect(restarted.begin()).rejects.toThrow("usage-cooldown");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("concurrent reservations cannot exceed one active run", async (): Promise<void> => {
   const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));

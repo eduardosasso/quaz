@@ -70,14 +70,17 @@ export const event = (value: unknown, now: number): Report | undefined => {
     .object({ type: z.string(), rate_limit_info: z.unknown().optional() })
     .safeParse(value);
   if (!frame.success || frame.data.type !== "rate_limit_event") return;
-  const info = z
+  const parsedInfo = z
     .object({
       status: z.enum(["allowed", "allowed_warning", "rejected"]),
       isUsingOverage: z.boolean().optional(),
       resetsAt: z.number().optional(),
       unifiedWindows: z.unknown().optional(),
     })
-    .parse(frame.data.rate_limit_info);
+    .safeParse(frame.data.rate_limit_info);
+  const cooldown: number = now + CONFIG.usage.probeSeconds * MILLISECONDS;
+  if (!parsedInfo.success) return { blockedUntil: cooldown };
+  const info = parsedInfo.data;
   const parsed = snapshot.safeParse(info.unifiedWindows);
 
   return {
@@ -85,7 +88,7 @@ export const event = (value: unknown, now: number): Report | undefined => {
     ...(!parsed.success || info.status === "rejected" || info.isUsingOverage
       ? {
           blockedUntil: Math.max(
-            now + CONFIG.usage.probeSeconds * MILLISECONDS,
+            cooldown,
             (info.status === "rejected" || info.isUsingOverage
               ? (info.resetsAt ?? 0)
               : 0) * MILLISECONDS,
