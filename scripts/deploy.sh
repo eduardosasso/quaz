@@ -87,7 +87,7 @@ if [ "$#" -eq 0 ]; then
   set -- deploy
 fi
 # Kamal skips the local registry login for remote builders, so the push would use a stale saved login.
-kamal registry login --skip-remote
+QUAZ_PROJECT_ID="${PROJECTS[0]}" kamal registry login --skip-remote
 # Every project deploys the same image, so only the first one builds and pushes it.
 FIRST=1
 for project in "${PROJECTS[@]}"; do
