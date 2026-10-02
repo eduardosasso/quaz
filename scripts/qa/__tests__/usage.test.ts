@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import CONFIG from "@qa/config.json";
@@ -300,6 +307,27 @@ test("probe failures remain paused without repeated calls", async (): Promise<vo
       events.some((event): boolean => event.event === "usage-probe-error"),
     ).toBe(true);
     await expect(store.begin()).rejects.toThrow("usage-cooldown");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("storage fault clears after a later successful write", async (): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));
+  const path: string = join(root, "usage.json");
+  try {
+    const store: Usage.Store = await Usage.connect(
+      path,
+      SETTINGS,
+      (): void => {},
+      async (): Promise<Usage.Report> => ({ snapshot: snapshot() }),
+      (): number => NOW,
+    );
+    await mkdir(`${path}.tmp`);
+    await expect(store.update({ snapshot: snapshot() })).rejects.toThrow();
+    expect((await store.ready()).reason).toBe("usage-storage");
+    await rm(`${path}.tmp`, { recursive: true });
+    expect((await store.ready()).reason).not.toBe("usage-storage");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

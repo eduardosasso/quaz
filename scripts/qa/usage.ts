@@ -307,6 +307,7 @@ export const connect = async (
     try {
       await writeFile(temporary, JSON.stringify(state), { mode: 0o600 });
       await rename(temporary, path);
+      fault = false;
     } catch (error: unknown) {
       fault = true;
       throw error;
@@ -337,6 +338,8 @@ export const connect = async (
   return {
     ready: (): Promise<Decision> =>
       serial(async (): Promise<Decision> => {
+        // Retry storage so a transient write failure does not disable the guard for good.
+        if (fault) await save().catch((): void => undefined);
         const last = state.samples.at(-1);
         const stale: boolean =
           !last ||
