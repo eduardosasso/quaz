@@ -64,6 +64,25 @@ Quaz uses Claude Code for guided reviews. Run `claude setup-token` on a trusted 
 
 The controller reads `QUAZ_TRACKER_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from Quaz's Environment at launch. It gives each worker a private token file under `/qa`. Only the Claude review process receives that token in its environment. Claude scrubs credentials from tool subprocesses. Raw Claude logs stay on the worker's temporary filesystem and are never tracker artifacts. The app server receives adapter-provided variables. The worker never receives the tracker or 1Password service token. Merv's Claude token remains separate.
 
+## Subscription usage protection
+
+Set `"usage": true` in the controller config to enable the guard. The Overdew project enables it under `controller.usage`. Existing configs keep their current behavior until this flag is enabled. Smoke tests do not use Claude and bypass the guard.
+
+The guard reads actual five-hour and weekly meters from Claude's `rate_limit_event` metadata. It never asks the model to estimate usage. It stores samples, reservations, and observed QA consumption in `/qa/usage.json`, inside the controller's persistent volume. Use one guarded controller per Claude subscription. Separate controllers do not share this ledger.
+
+The policy lives in `scripts/qa/config.json`, under `usage`:
+
+- Keep at least 50% available while learning from the first 24 hours of usable idle observations.
+- After learning, reserve the larger of 20% or projected personal use plus a margin. Projection uses the higher of the recent six-hour rate and the recorded average. It multiplies that rate by time until reset and a 1.5 safety factor, then adds ten percentage points.
+- Exclude QA intervals and reset crossings from personal usage learning. Keep 14 days of history. Concurrent personal use during QA counts conservatively toward QA consumption.
+- Allow only one QA run at a time and at most two starts per rolling day, including failed runs. Each window limits observed QA consumption to 10% of its allowance. Estimate the next run from the largest recent run, with a safety factor. Spread the remaining budget until reset.
+- Require both meters to be less than five minutes old. Pause on missing data, expired windows, cooldowns, or storage failures. Check before each model phase and monitor its response stream. Stop that phase when a reserve or share is reached.
+- When idle, obtain fresh metadata at most once per hour with a tool-free Haiku probe. Each probe has a 45-second timeout and a $0.02 API-equivalent budget. This is a bound on probe work, not an extra subscription charge. Probe usage contributes to the account readings. Normal QA responses supply readings during runs.
+
+Limits apply when Claude reports usage. An in-flight request can exceed a threshold before it returns. This guard reduces QA consumption but cannot guarantee unused subscription capacity. It does not control your other applications. A paused or interrupted review cannot verify a fix.
+
+For rollout, first run the new image with a separate temporary ledger and inspect `usage-probe` and `usage-decision` logs. Enable the controller flag only after both meters and pause behavior are confirmed. Preserve the existing image digest and configs for rollback. Disabling the flag restores the previous schedule; stopping the controller keeps QA paused. Never delete the ledger to clear a limit.
+
 ## Controller startup contract
 
 Build or pull the shared Quaz image. Set `QUAZ_BASE_IMAGE` to a registry image with an `@sha256:` digest to use a published image. The published image must match a clean Quaz checkout at the same commit. Keep the project config at the same absolute path on the Docker host and inside the controller. For source mode, mount the complete target checkout at the project config's `root`. The deployment preflight checks declared source files, any custom Dockerfile, and a clean Git checkout. When a deployment URL is set, its revision must match that checkout. For remote mode, the target app must be reachable from the worker's Docker network.

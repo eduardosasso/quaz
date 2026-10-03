@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type * as Client from "@qa/client";
 import * as Image from "@qa/image";
 import * as Runner from "@qa/run";
+import type * as Usage from "@qa/usage";
 import type * as Protocol from "@/qa_protocol";
 
 const client: Client.Client = {
@@ -342,6 +343,133 @@ describe("crash recovery placeholder", (): void => {
         directory,
       );
       expect(conclusion.status).toBe("failed");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("usage pause classification", (): void => {
+  const digest: string = `sha256:${"c".repeat(64)}`;
+  // The fake worker calls the bridge's /usage route, writes its message to stderr, and exits non-zero.
+  const worker = (message: string): string =>
+    [
+      "#!/bin/sh",
+      'case "$1" in',
+      "info) echo test ;;",
+      `image) echo ${digest} ;;`,
+      "run)",
+      '  for arg in "$@"; do',
+      '    case "$arg" in',
+      '      QA_BRIDGE_URL=*) port=$(echo "$arg" | sed "s/.*://") ;;',
+      '      QA_BRIDGE_TOKEN=*) token=$(echo "$arg" | sed "s/^[^=]*=//") ;;',
+      "    esac",
+      "  done",
+      '  url="http://127.0.0.1:$port"',
+      '  curl -s -X POST -H "authorization: Bearer $token" -d "{}" "$url/usage" > "$0.post"',
+      '  curl -s -H "authorization: Bearer $token" "$url/usage" > "$0.get"',
+      `  echo "${message}" >&2`,
+      "  exit 1 ;;",
+      "esac",
+      "exit 0",
+      "",
+    ].join("\n");
+  const attempt = async (
+    message: string,
+  ): Promise<{ failure: unknown; directory: string; posted: unknown[] }> => {
+    const directory: string = await mkdtemp(join(tmpdir(), "quaz-run-usage-"));
+    const docker: string = await dockerBinary(directory, worker(message));
+    const staged: string = await mkdtemp(join(tmpdir(), "quaz-run-stage-"));
+    await writeFile(join(staged, "app.ts"), "export const value = 1;");
+    const posted: unknown[] = [];
+    const store: Usage.Store = {
+      ready: async () => ({ allowed: true, reason: "ready" }),
+      begin: async () => "reservation",
+      finish: async () => undefined,
+      update: async (reading) => {
+        posted.push(reading ?? null);
+        return { allowed: true, reason: "tracked" };
+      },
+    };
+    const record = (began: Protocol.Begin): Protocol.Run => ({
+      ...began,
+      note_id: 1,
+      board_id: 1,
+      owner: "qa",
+      status: "open",
+      expires: Date.now() + 1_000_000,
+      target: null,
+      snapshot: null,
+      receipt: null,
+    });
+    const tracker: Client.Client = {
+      upload: async (): Promise<number> => 1,
+      request: async <T>(
+        path: string,
+        _method?: string,
+        body?: unknown,
+      ): Promise<T> => {
+        if (path === "/runs") return record(body as Protocol.Begin) as T;
+        if (path.endsWith("/ready")) return {} as T;
+        if (path.startsWith("/state")) return { tickets: [] } as T;
+        if (path.endsWith("/finish"))
+          return {
+            run: { ...record(body as Protocol.Begin), status: "failed" },
+          } as T;
+        throw new Error(`Unexpected client request ${path}`);
+      },
+    };
+    const executable = dockerOnly(docker);
+    const base = spyOn(Image, "base").mockResolvedValue(
+      `quaz:base@sha256:${"b".repeat(64)}`,
+    );
+    const stage = spyOn(Image, "stage").mockResolvedValue(staged);
+    try {
+      const file: string = await project(directory);
+      const failure: unknown = await Runner.run(
+        {
+          ...Runner.options([
+            "--project",
+            file,
+            "--mode",
+            "smoke",
+            "--testers",
+            "1",
+            "--output",
+            directory,
+          ]),
+          usage: store,
+        },
+        undefined,
+        tracker,
+      ).catch((error: unknown): unknown => error);
+      return { failure, directory, posted };
+    } finally {
+      stage.mockRestore();
+      base.mockRestore();
+      executable.mockRestore();
+      await rm(staged, { recursive: true, force: true });
+    }
+  };
+
+  test("a usage pause is interrupted and the bridge serves /usage", async (): Promise<void> => {
+    const { failure, directory, posted } = await attempt(
+      "QA paused: usage window is full",
+    );
+    try {
+      expect(failure).toBeInstanceOf(Runner.Interrupted);
+      expect((failure as Error).message).toContain("QA paused:");
+      expect(posted).toEqual([{}, null]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("an ordinary worker failure stays an error", async (): Promise<void> => {
+    const { failure, directory } = await attempt("browser crashed");
+    try {
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).not.toBeInstanceOf(Runner.Interrupted);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

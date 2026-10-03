@@ -42,5 +42,27 @@
   "processLimit": 512,
   "workerUid": 1000,
   "workerGid": 1000,
-  "image": "quaz"
+  "image": "quaz",
+  "usage": {
+    "reserve": 0.2,
+    "margin": 0.1,
+    "initialReserve": 0.5,
+    "share": 0.1,
+    "initialCost": 0.02,
+    "safety": 1.5,
+    "historyDays": 14,
+    "learningHours": 24,
+    "trendHours": 6,
+    "minimumSampleSeconds": 300,
+    "freshSeconds": 300,
+    "probeSeconds": 3600,
+    "probeTimeoutSeconds": 45,
+    "probeModel": "haiku",
+    "probeBudgetUsd": 0.02,
+    "dailyRuns": 2,
+    "minimumRunSeconds": 3600,
+    "monitorSeconds": 1,
+    "heartbeatSeconds": 30,
+    "readBytes": 65536
+  }
 }

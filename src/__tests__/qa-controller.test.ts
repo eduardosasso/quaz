@@ -912,10 +912,15 @@ describe("QA controller config file", (): void => {
   test("project file supplies settings and its own path", async (): Promise<void> => {
     const file: string = await write({
       ...PROJECT,
-      controller: { mode: "verify", parallel: 3 },
+      controller: { mode: "verify", parallel: 3, usage: true },
     });
     expect(await Controller.load(file)).toEqual(
-      Controller.schema.parse({ project: file, mode: "verify", parallel: 3 }),
+      Controller.schema.parse({
+        project: file,
+        mode: "verify",
+        parallel: 3,
+        usage: true,
+      }),
     );
   });
   test("project file rejects invalid settings", async (): Promise<void> => {
@@ -1115,5 +1120,104 @@ describe("QA automatic publication recovery", (): void => {
     expect(ids.length).toBeGreaterThanOrEqual(2);
     expect(ids.every((id): boolean => id === original.id)).toBe(true);
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("QA subscription guard", (): void => {
+  test("enabled guard requires usage storage", async (): Promise<void> => {
+    await expect(
+      Controller.loop(
+        settings({ usage: true }),
+        PROJECT,
+        REVISION,
+        new AbortController().signal,
+        {
+          revision: async (): Promise<string> => REVISION,
+          state: async (): Promise<Protocol.State> => state(),
+          recover: async (): Promise<void> => {},
+          execute: async (): Promise<void> => {},
+          now: (): number => NOW,
+          wait: async (): Promise<void> => {},
+          log: (): void => {},
+        },
+      ),
+    ).rejects.toThrow("persistent usage store");
+  });
+
+  test("usage pause blocks all QA including verification", async (): Promise<void> => {
+    const stopping: AbortController = new AbortController();
+    let launches: number = 0;
+    await Controller.loop(
+      settings({ usage: true }),
+      PROJECT,
+      REVISION,
+      stopping.signal,
+      {
+        revision: async (): Promise<string> => REVISION,
+        state: async (): Promise<Protocol.State> =>
+          state({ tickets: [ticket(2)] }),
+        recover: async (): Promise<void> => {},
+        execute: async (): Promise<void> => {
+          launches++;
+        },
+        usage: {
+          ready: async () => ({ allowed: false, reason: "usage-reserve" }),
+          begin: async (): Promise<string> => {
+            throw new Error("Must not reserve");
+          },
+          finish: async (): Promise<void> => {},
+          update: async () => ({ allowed: false, reason: "usage-reserve" }),
+        },
+        now: (): number => NOW,
+        wait: async (): Promise<void> => {
+          stopping.abort();
+        },
+        log: (): void => {},
+      },
+    );
+    expect(launches).toBe(0);
+  });
+
+  test("reservations serialize launches and settle failures", async (): Promise<void> => {
+    const stopping: AbortController = new AbortController();
+    let reserved: boolean = false;
+    let finished: number = 0;
+    let launches: number = 0;
+    await Controller.loop(
+      settings({ usage: true, parallel: 3 }),
+      PROJECT,
+      REVISION,
+      stopping.signal,
+      {
+        revision: async (): Promise<string> => REVISION,
+        state: async (): Promise<Protocol.State> => state(),
+        recover: async (): Promise<void> => {},
+        execute: async (): Promise<void> => {
+          launches++;
+          await Bun.sleep(5);
+          throw new Runner.Interrupted("usage-reserve");
+        },
+        usage: {
+          ready: async () => ({ allowed: !reserved, reason: "test" }),
+          begin: async (): Promise<string> => {
+            reserved = true;
+            return "test-run";
+          },
+          finish: async (id: string): Promise<void> => {
+            expect(id).toBe("test-run");
+            finished++;
+            stopping.abort();
+          },
+          update: async () => ({ allowed: false, reason: "usage-reserve" }),
+        },
+        now: (): number => NOW,
+        wait: async (): Promise<void> => {
+          await Bun.sleep(10);
+        },
+        log: (): void => {},
+      },
+    );
+    expect(launches).toBe(1);
+    expect(finished).toBe(1);
   });
 });
