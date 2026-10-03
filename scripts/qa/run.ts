@@ -907,7 +907,7 @@ export const run = async (
             if (conclusion.status === Protocol.INTERRUPTED)
               throw new Interrupted(conclusion.summary);
             if (conclusion.status === "failed") {
-              if (input.usage && !(await input.usage.update()).allowed)
+              if (input.usage && conclusion.summary.includes("QA paused:"))
                 throw new Interrupted(conclusion.summary);
               throw new Error(conclusion.summary);
             }
