@@ -7,7 +7,11 @@ import {
   REQUEST_MS,
 } from "@/qa_protocol";
 
-const request = async <T>(path: string, body?: unknown): Promise<T> => {
+const request = async <T>(
+  path: string,
+  body?: unknown,
+  timeout: number = REQUEST_MS,
+): Promise<T> => {
   const origin: string = process.env.QA_BRIDGE_URL ?? "";
   const token: string = process.env.QA_BRIDGE_TOKEN ?? "";
   if (!origin || !token || process.env.QA_DISPOSABLE !== "1")
@@ -22,7 +26,7 @@ const request = async <T>(path: string, body?: unknown): Promise<T> => {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_MS),
+      signal: AbortSignal.timeout(timeout),
     });
   } catch (error: unknown) {
     throw new Error(`QA coverage ${path} failed: ${ErrorName.describe(error)}`);
@@ -35,7 +39,9 @@ const request = async <T>(path: string, body?: unknown): Promise<T> => {
   }
 };
 export const budget = async (reading?: Usage.Report): Promise<Usage.Control> =>
-  Usage.control.parse(await request<unknown>("/usage", reading));
+  Usage.control.parse(
+    await request<unknown>("/usage", reading, Usage.REQUEST_MS),
+  );
 export const catalog = async (): Promise<Catalog> =>
   catalogSchema.parse(await request<unknown>("/catalog"));
 export const publication = async (): Promise<Catalog | null> =>
