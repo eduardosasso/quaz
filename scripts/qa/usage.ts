@@ -11,8 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import CONFIG from "@qa/config.json";
 import { z } from "zod";
+import * as Protocol from "@/qa_protocol";
 
 const MILLISECONDS: number = 1000;
+export const REQUEST_MS: number =
+  CONFIG.usage.probeTimeoutSeconds * MILLISECONDS + Protocol.REQUEST_MS;
 const HOUR: number = 3600 * MILLISECONDS;
 const DAY: number = 24 * HOUR;
 const WINDOWS = ["five_hour", "seven_day"] as const;
@@ -333,6 +336,41 @@ export const connect = async (
 
     return result;
   };
+  const refresh = async (running: boolean): Promise<void> => {
+    const active: boolean = state.runs.some(
+      (item): boolean => item.end === null,
+    );
+    if (fault || active !== running || now() < state.blockedUntil) return;
+    const last: z.infer<typeof sample> | undefined = state.samples.at(-1);
+    const interval: number = running
+      ? settings.activeProbeSeconds
+      : settings.freshSeconds;
+    const stale: boolean =
+      !last ||
+      last.at < (state.runs.at(-1)?.end ?? 0) ||
+      now() - last.at >= interval * MILLISECONDS ||
+      WINDOWS.some(
+        (name): boolean => last.snapshot[name].resetsAt * MILLISECONDS <= now(),
+      );
+    if (!stale || (!running && now() < state.nextProbe)) return;
+    state.nextProbe = now() + settings.probeSeconds * MILLISECONDS;
+    await save();
+    try {
+      const reading: Report = report.parse(await probe());
+      if (!reading.snapshot && !reading.blockedUntil)
+        throw new Error("Usage probe has no subscription meters");
+      observe(state, reading, now(), settings);
+      log({ event: "usage-probe", active: running, ...reading });
+    } catch (error: unknown) {
+      state.blockedUntil = Math.max(state.blockedUntil, state.nextProbe);
+      log({
+        event: "usage-probe-error",
+        active: running,
+        error: String(error),
+      });
+    }
+    await save();
+  };
   await save();
 
   return {
@@ -340,33 +378,7 @@ export const connect = async (
       serial(async (): Promise<Decision> => {
         // Retry storage so a transient write failure does not disable the guard for good.
         if (fault) await save().catch((): void => undefined);
-        const last = state.samples.at(-1);
-        const stale: boolean =
-          !last ||
-          last.at < (state.runs.at(-1)?.end ?? 0) ||
-          now() - last.at > settings.freshSeconds * MILLISECONDS ||
-          WINDOWS.some(
-            (name): boolean =>
-              last.snapshot[name].resetsAt * MILLISECONDS <= now(),
-          );
-        if (
-          !fault &&
-          stale &&
-          now() >= Math.max(state.nextProbe, state.blockedUntil) &&
-          !state.runs.some((item): boolean => item.end === null)
-        ) {
-          state.nextProbe = now() + settings.probeSeconds * MILLISECONDS;
-          await save();
-          try {
-            const reading: Report = report.parse(await probe());
-            observe(state, reading, now(), settings);
-            log({ event: "usage-probe", ...reading });
-          } catch (error: unknown) {
-            state.blockedUntil = Math.max(state.blockedUntil, state.nextProbe);
-            log({ event: "usage-probe-error", error: String(error) });
-          }
-          await save();
-        }
+        await refresh(false);
 
         return status(false);
       }),
@@ -394,6 +406,7 @@ export const connect = async (
           observe(state, report.parse(reading), now(), settings);
           await save();
         }
+        await refresh(true);
 
         return status(true);
       }),

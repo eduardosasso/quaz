@@ -26,7 +26,8 @@ import * as Protocol from "@/qa_protocol";
 const ROOT: string = resolve(import.meta.dir, "../..");
 const MILLISECONDS: number = 1000;
 // Outlasts the worker's request timeout, so a slow bridge call ends in that timeout instead of a closed socket.
-const BRIDGE_IDLE_SECONDS: number = (2 * Protocol.REQUEST_MS) / MILLISECONDS;
+const BRIDGE_IDLE_SECONDS: number =
+  (Usage.REQUEST_MS + Protocol.REQUEST_MS) / MILLISECONDS;
 export type Options = {
   usage?: Usage.Store;
   mode: Protocol.Mode;

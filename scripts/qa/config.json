@@ -55,6 +55,7 @@
     "trendHours": 6,
     "minimumSampleSeconds": 300,
     "freshSeconds": 300,
+    "activeProbeSeconds": 180,
     "probeSeconds": 3600,
     "probeTimeoutSeconds": 45,
     "probeModel": "haiku",

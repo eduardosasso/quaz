@@ -312,6 +312,174 @@ test("probe failures remain paused without repeated calls", async (): Promise<vo
   }
 });
 
+test("active refresh keeps long runs alive and shares concurrent probes", async (): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));
+  const path: string = join(root, "usage.json");
+  let now: number = NOW;
+  let calls: number = 0;
+  const events: Record<string, unknown>[] = [];
+  try {
+    const store: Usage.Store = await Usage.connect(
+      path,
+      SETTINGS,
+      (event): void => {
+        events.push(event);
+      },
+      async (): Promise<Usage.Report> => {
+        calls++;
+        return { snapshot: snapshot(0.1 + calls / 100, 0.1 + calls / 100) };
+      },
+      (): number => now,
+    );
+    await store.ready();
+    await store.begin();
+    now += SETTINGS.activeProbeSeconds * 1000;
+    const decisions: Usage.Decision[] = await Promise.all([
+      store.update(),
+      store.update(),
+      store.update(),
+    ]);
+    expect(decisions.every((decision): boolean => decision.allowed)).toBe(true);
+    expect(calls).toBe(2);
+    now += SETTINGS.activeProbeSeconds * 1000;
+    expect(now - NOW).toBeGreaterThan(SETTINGS.freshSeconds * 1000);
+    expect((await store.update()).allowed).toBe(true);
+    expect(calls).toBe(3);
+    const saved: Usage.Ledger = JSON.parse(await readFile(path, "utf8"));
+    expect(saved.samples.at(-1)?.active).toBe(true);
+    expect(saved.runs[0].charges[0].amount).toBeCloseTo(0.02);
+    expect(
+      events.filter(
+        (event): boolean =>
+          event.event === "usage-probe" && event.active === true,
+      ),
+    ).toHaveLength(2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("fresh stream readings postpone active probes", async (): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));
+  let now: number = NOW;
+  let calls: number = 0;
+  try {
+    const store: Usage.Store = await Usage.connect(
+      join(root, "usage.json"),
+      SETTINGS,
+      (): void => {},
+      async (): Promise<Usage.Report> => {
+        calls++;
+        return { snapshot: snapshot() };
+      },
+      (): number => now,
+    );
+    await store.ready();
+    await store.begin();
+    now += SETTINGS.activeProbeSeconds * 1000;
+    await store.update({ snapshot: snapshot() });
+    now += SETTINGS.activeProbeSeconds * 1000 - 1;
+    expect((await store.update()).allowed).toBe(true);
+    expect(calls).toBe(1);
+    now++;
+    expect((await store.update()).allowed).toBe(true);
+    expect(calls).toBe(2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("idle requests never trigger active probes", async (): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));
+  let now: number = NOW;
+  let calls: number = 0;
+  try {
+    const store: Usage.Store = await Usage.connect(
+      join(root, "usage.json"),
+      SETTINGS,
+      (): void => {},
+      async (): Promise<Usage.Report> => {
+        calls++;
+        return { snapshot: snapshot() };
+      },
+      (): number => now,
+    );
+    await store.ready();
+    now += SETTINGS.activeProbeSeconds * 1000;
+    await store.update();
+    await store.ready();
+    expect(calls).toBe(1);
+    now = NOW + SETTINGS.probeSeconds * 1000 - 1;
+    await store.update();
+    await store.ready();
+    expect(calls).toBe(1);
+    now++;
+    await store.ready();
+    expect(calls).toBe(2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test.each(["failure", "empty", "reserve", "rejected"])(
+  "active probe %s stops work",
+  async (outcome: string): Promise<void> => {
+    const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));
+    const path: string = join(root, "usage.json");
+    let now: number = NOW;
+    let calls: number = 0;
+    const events: Record<string, unknown>[] = [];
+    try {
+      const store: Usage.Store = await Usage.connect(
+        path,
+        SETTINGS,
+        (event): void => {
+          events.push(event);
+        },
+        async (): Promise<Usage.Report> => {
+          calls++;
+          if (calls === 1) return { snapshot: snapshot() };
+          if (outcome === "failure") throw new Error("Probe unavailable");
+          if (outcome === "empty") return {};
+          if (outcome === "rejected") return { blockedUntil: now + HOUR };
+          return { snapshot: snapshot(0.9, 0.9) };
+        },
+        (): number => now,
+      );
+      await store.ready();
+      const id: string = await store.begin();
+      now += SETTINGS.activeProbeSeconds * 1000;
+      const decision: Usage.Decision = await store.update();
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toBe(
+        outcome === "reserve" ? "usage-reserve-five_hour" : "usage-cooldown",
+      );
+      expect((await store.update()).allowed).toBe(false);
+      expect(calls).toBe(2);
+      await store.finish(id);
+      const restarted: Usage.Store = await Usage.connect(
+        path,
+        SETTINGS,
+        (): void => {},
+        async (): Promise<Usage.Report> => {
+          throw new Error("Unexpected probe");
+        },
+        (): number => now,
+      );
+      expect((await restarted.ready()).allowed).toBe(false);
+      if (["failure", "empty"].includes(outcome))
+        expect(
+          events.some(
+            (event): boolean =>
+              event.event === "usage-probe-error" && event.active === true,
+          ),
+        ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test("storage fault clears after a later successful write", async (): Promise<void> => {
   const root: string = await mkdtemp(join(tmpdir(), "quaz-usage-test-"));
   const path: string = join(root, "usage.json");
