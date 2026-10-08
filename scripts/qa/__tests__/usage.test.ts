@@ -35,6 +35,25 @@ const state = (): Usage.Ledger => {
 
   return result;
 };
+const history = (
+  start: number,
+  hours: number,
+  usage: (hour: number) => number,
+  reset: number,
+): Usage.Ledger => {
+  const result: Usage.Ledger = Usage.empty();
+  let total: number = 0;
+  for (let hour: number = 0; hour <= hours; hour++) {
+    total += hour ? usage(hour - 1) : 0;
+    const reading: Usage.Snapshot = {
+      five_hour: { utilization: 0, resetsAt: reset / 1000 },
+      seven_day: { utilization: total, resetsAt: reset / 1000 },
+    };
+    Usage.observe(result, { snapshot: reading }, start + hour * HOUR, SETTINGS);
+  }
+
+  return result;
+};
 const frame = (reading: Usage.Snapshot = snapshot()): string =>
   JSON.stringify({
     type: "rate_limit_event",
@@ -111,7 +130,7 @@ test("personal use raises the reserve and slows scheduling", (): void => {
   Usage.observe(value, { snapshot: snapshot(0.1, 0.1) }, NOW - HOUR, SETTINGS);
   Usage.observe(value, { snapshot: snapshot(0.1, 0.12) }, NOW, SETTINGS);
   expect(Usage.reserve(value, "seven_day", NOW, SETTINGS)).toBe(1);
-  expect(Usage.assess(value, NOW, SETTINGS).reason).toBe(
+  expect(Usage.assess(value, NOW, SETTINGS, true).reason).toBe(
     "usage-reserve-seven_day",
   );
 });
@@ -121,8 +140,58 @@ test("learned quiet history lowers the initial reserve", (): void => {
   Usage.observe(value, { snapshot: snapshot() }, NOW - DAY, SETTINGS);
   Usage.observe(value, { snapshot: snapshot() }, NOW, SETTINGS);
   expect(Usage.reserve(value, "seven_day", NOW, SETTINGS)).toBe(
-    SETTINGS.reserve,
+    SETTINGS.margin,
   );
+});
+
+test("forecast uses the same hours of past weeks", (): void => {
+  const early: Usage.Ledger = history(
+    NOW - 7 * DAY,
+    7 * 24,
+    (hour: number): number => (hour >= 2 && hour < 5 ? 0.01 : 0),
+    NOW + DAY,
+  );
+  expect(Usage.forecast(early, "seven_day", NOW, SETTINGS)).toBeCloseTo(0.03);
+  const late: Usage.Ledger = history(
+    NOW - 7 * DAY,
+    7 * 24,
+    (hour: number): number => (hour >= 30 && hour < 33 ? 0.01 : 0),
+    NOW + DAY,
+  );
+  expect(Usage.forecast(late, "seven_day", NOW, SETTINGS)).toBeCloseTo(0);
+});
+
+test("busiest recorded week sets each hour", (): void => {
+  const value: Usage.Ledger = history(
+    NOW - 14 * DAY,
+    14 * 24,
+    (hour: number): number => {
+      if (hour >= 2 && hour < 5) return 0.03;
+
+      return hour >= 170 && hour < 173 ? 0.01 : 0;
+    },
+    NOW + DAY,
+  );
+  expect(Usage.forecast(value, "seven_day", NOW, SETTINGS)).toBeCloseTo(0.09);
+});
+
+test("unseen hours use the flat rate", (): void => {
+  const value: Usage.Ledger = history(
+    NOW - 2 * DAY,
+    2 * 24,
+    (hour: number): number => (hour < 24 ? 0.002 : 0),
+    NOW + 7 * DAY,
+  );
+  expect(Usage.forecast(value, "seven_day", NOW, SETTINGS)).toBeCloseTo(0.168);
+});
+
+test("personal use since the last check defers QA", (): void => {
+  const value: Usage.Ledger = Usage.empty();
+  Usage.observe(value, { snapshot: snapshot() }, NOW - HOUR, SETTINGS);
+  Usage.observe(value, { snapshot: snapshot() }, NOW, SETTINGS);
+  expect(Usage.assess(value, NOW, SETTINGS).allowed).toBe(true);
+  Usage.observe(value, { snapshot: snapshot(0.12) }, NOW + HOUR, SETTINGS);
+  expect(Usage.assess(value, NOW + HOUR, SETTINGS).reason).toBe("usage-yield");
 });
 
 test("QA intervals never become personal usage samples", (): void => {
@@ -172,48 +241,67 @@ test("a window reset is never charged to the active run", (): void => {
   expect(five?.amount).toBe(0);
 });
 
-test("share and daily limits hold independently of personal reserve", (): void => {
+test("increased account use delays the next run", (): void => {
   const value: Usage.Ledger = state();
   value.runs.push({
     id: "run",
-    start: NOW - DAY,
-    end: NOW - 1,
+    start: NOW - 4 * HOUR,
+    end: NOW - HOUR,
     charges: [
       {
         window: "seven_day",
         reset: snapshot().seven_day.resetsAt,
-        amount: SETTINGS.share,
+        amount: 0.002,
+      },
+    ],
+  });
+  expect(Usage.assess(value, NOW, SETTINGS).allowed).toBe(true);
+  value.samples[0].snapshot.seven_day.utilization = 0.39;
+  expect(Usage.assess(value, NOW, SETTINGS).reason).toBe(
+    "usage-pacing-seven_day",
+  );
+});
+
+test("the same spare is spent faster near reset", (): void => {
+  const value: Usage.Ledger = state();
+  value.samples[0].snapshot.seven_day.utilization = 0.39;
+  value.runs.push({
+    id: "run",
+    start: NOW - 4 * HOUR,
+    end: NOW - HOUR,
+    charges: [
+      {
+        window: "seven_day",
+        reset: snapshot().seven_day.resetsAt,
+        amount: 0.002,
       },
     ],
   });
   expect(Usage.assess(value, NOW, SETTINGS).reason).toBe(
-    "usage-share-seven_day",
+    "usage-pacing-seven_day",
   );
-  value.runs = Array.from(
-    { length: SETTINGS.dailyRuns },
-    (_entry: unknown, index: number) => ({
-      id: String(index),
-      start: NOW - HOUR * (index + 1),
-      end: NOW - 1,
-      charges: [],
-    }),
-  );
-  expect(Usage.assess(value, NOW, SETTINGS).reason).toBe("usage-daily-cap");
+  value.samples[0].snapshot.seven_day.resetsAt = (NOW + DAY) / 1000;
+  value.runs[0].charges[0].reset = (NOW + DAY) / 1000;
+  expect(Usage.assess(value, NOW, SETTINGS).allowed).toBe(true);
 });
 
-test("increased account use delays the next run", (): void => {
-  const settings: Usage.Settings = { ...SETTINGS, initialCost: 0.001 };
+test("measured run cost replaces the initial estimate", (): void => {
   const value: Usage.Ledger = state();
+  value.samples[0].snapshot.seven_day.utilization = 0.39;
   value.runs.push({
     id: "run",
     start: NOW - 4 * HOUR,
     end: NOW - HOUR,
     charges: [],
   });
-  expect(Usage.assess(value, NOW, settings).allowed).toBe(true);
-  value.samples[0].snapshot.seven_day.utilization = 0.49;
-  expect(Usage.assess(value, NOW, settings).reason).toBe(
-    "usage-pacing-seven_day",
+  expect(Usage.assess(value, NOW, SETTINGS).allowed).toBe(true);
+  value.runs[0].charges.push({
+    window: "seven_day",
+    reset: snapshot().seven_day.resetsAt,
+    amount: 0.2,
+  });
+  expect(Usage.assess(value, NOW, SETTINGS).reason).toBe(
+    "usage-capacity-seven_day",
   );
 });
 

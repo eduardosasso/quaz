@@ -18,6 +18,7 @@ export const REQUEST_MS: number =
   CONFIG.usage.probeTimeoutSeconds * MILLISECONDS + Protocol.REQUEST_MS;
 const HOUR: number = 3600 * MILLISECONDS;
 const DAY: number = 24 * HOUR;
+const WEEK_HOURS: number = 7 * 24;
 const WINDOWS = ["five_hour", "seven_day"] as const;
 type Window = (typeof WINDOWS)[number];
 const window = z.object({
@@ -156,67 +157,147 @@ export const observe = (
       item.end === null || item.start >= now - settings.historyDays * DAY,
   );
 };
+type Interval = { start: number; end: number; delta: number };
+const personal = (
+  state: Ledger,
+  name: Window,
+  now: number,
+  settings: Settings,
+): Interval[] =>
+  state.samples.slice(1).flatMap((current, index): Interval[] => {
+    const prior = state.samples[index];
+    const quiet: boolean =
+      !prior.active &&
+      !current.active &&
+      current.at - prior.at >= settings.minimumSampleSeconds * MILLISECONDS &&
+      prior.snapshot[name].resetsAt === current.snapshot[name].resetsAt &&
+      !state.runs.some(
+        (item): boolean =>
+          item.start < current.at && (item.end ?? now) > prior.at,
+      );
+    if (!quiet) return [];
+
+    return [
+      {
+        start: prior.at,
+        end: current.at,
+        delta: Math.max(
+          0,
+          current.snapshot[name].utilization - prior.snapshot[name].utilization,
+        ),
+      },
+    ];
+  });
+const duration = (items: Interval[]): number =>
+  items.reduce((sum: number, item): number => sum + item.end - item.start, 0);
+const rate = (items: Interval[]): number => {
+  const elapsed: number = duration(items);
+
+  return elapsed
+    ? items.reduce((sum: number, item): number => sum + item.delta, 0) / elapsed
+    : 0;
+};
+// Each hour of the week keeps the busiest rate seen in any recorded week.
+const profile = (items: Interval[]): Map<number, number> => {
+  const hours: Map<number, { used: number; covered: number }> = new Map();
+  for (const item of items) {
+    const speed: number = item.delta / (item.end - item.start);
+    for (
+      let hour: number = Math.floor(item.start / HOUR);
+      hour * HOUR < item.end;
+      hour++
+    ) {
+      const covered: number =
+        Math.min(item.end, (hour + 1) * HOUR) -
+        Math.max(item.start, hour * HOUR);
+      const entry = hours.get(hour) ?? { used: 0, covered: 0 };
+      hours.set(hour, {
+        used: entry.used + speed * covered,
+        covered: entry.covered + covered,
+      });
+    }
+  }
+  const slots: Map<number, number> = new Map();
+  for (const [hour, entry] of hours) {
+    const slot: number = hour % WEEK_HOURS;
+    slots.set(slot, Math.max(slots.get(slot) ?? 0, entry.used / entry.covered));
+  }
+
+  return slots;
+};
+export const forecast = (
+  state: Ledger,
+  name: Window,
+  now: number,
+  settings: Settings,
+): number => {
+  const items: Interval[] = personal(state, name, now, settings);
+  const slots: Map<number, number> = profile(items);
+  const flat: number = Math.max(
+    rate(items),
+    rate(
+      items.filter(
+        (item): boolean => item.start >= now - settings.trendHours * HOUR,
+      ),
+    ),
+  );
+  const reset: number =
+    (state.samples.at(-1)?.snapshot[name].resetsAt ?? 0) * MILLISECONDS;
+  let total: number = 0;
+  for (let start: number = now; start < reset; ) {
+    const hour: number = Math.floor(start / HOUR);
+    const end: number = Math.min(reset, (hour + 1) * HOUR);
+    total += (slots.get(hour % WEEK_HOURS) ?? flat) * (end - start);
+    start = end;
+  }
+
+  return total;
+};
 export const reserve = (
   state: Ledger,
   name: Window,
   now: number,
   settings: Settings,
 ): number => {
-  let elapsed: number = 0;
-  let consumed: number = 0;
-  let recentElapsed: number = 0;
-  let recentConsumed: number = 0;
-  for (let index: number = 1; index < state.samples.length; index++) {
-    const prior = state.samples[index - 1];
-    const current = state.samples[index];
-    const duration: number = current.at - prior.at;
-    if (
-      prior.active ||
-      current.active ||
-      duration < settings.minimumSampleSeconds * MILLISECONDS
-    )
-      continue;
-    if (prior.snapshot[name].resetsAt !== current.snapshot[name].resetsAt)
-      continue;
-    if (
-      state.runs.some(
-        (item): boolean =>
-          item.start < current.at && (item.end ?? now) > prior.at,
-      )
-    )
-      continue;
-    const delta: number = Math.max(
-      0,
-      current.snapshot[name].utilization - prior.snapshot[name].utilization,
-    );
-    elapsed += duration;
-    consumed += delta;
-    if (prior.at < now - settings.trendHours * HOUR) continue;
-    recentElapsed += duration;
-    recentConsumed += delta;
-  }
-  const remaining: number = Math.max(
-    0,
-    (state.samples.at(-1)?.snapshot[name].resetsAt ?? 0) * MILLISECONDS - now,
-  );
-  const rate: number = Math.max(
-    elapsed ? consumed / elapsed : 0,
-    recentElapsed ? recentConsumed / recentElapsed : 0,
-  );
-  const floor: number =
-    elapsed < settings.learningHours * HOUR
-      ? settings.initialReserve
-      : settings.reserve;
+  const learning: boolean =
+    duration(personal(state, name, now, settings)) <
+    settings.learningHours * HOUR;
 
   return Math.min(
     1,
     Math.max(
-      floor,
-      settings.reserve,
-      rate * remaining * settings.safety + settings.margin,
+      learning ? settings.initialReserve : 0,
+      forecast(state, name, now, settings) + settings.margin,
     ),
   );
 };
+const cost = (state: Ledger, name: Window, settings: Settings): number => {
+  const finished: z.infer<typeof run>[] = state.runs.filter(
+    (item): boolean => item.end !== null,
+  );
+  const spent: number = finished
+    .flatMap((item): z.infer<typeof charge>[] => item.charges)
+    .filter((item): boolean => item.window === name)
+    .reduce((sum: number, item): number => sum + item.amount, 0);
+
+  return (
+    (finished.length ? spent / finished.length : settings.initialCost) *
+    settings.safety
+  );
+};
+const busy = (state: Ledger, now: number, settings: Settings): boolean =>
+  WINDOWS.some((name): boolean => {
+    const recent: Interval | undefined = personal(
+      state,
+      name,
+      now,
+      settings,
+    ).at(-1);
+
+    return (
+      !!recent && recent.end === state.samples.at(-1)?.at && recent.delta > 0
+    );
+  });
 export const assess = (
   state: Ledger,
   now: number,
@@ -236,12 +317,7 @@ export const assess = (
     return deny("usage-post-run");
   if (!running && state.runs.some((item): boolean => item.end === null))
     return deny("usage-active");
-  if (
-    !running &&
-    state.runs.filter((item): boolean => item.start > now - DAY).length >=
-      settings.dailyRuns
-  )
-    return deny("usage-daily-cap");
+  if (!running && busy(state, now, settings)) return deny("usage-yield");
   for (const name of WINDOWS) {
     const current = last.snapshot[name];
     const remaining: number = current.resetsAt * MILLISECONDS - now;
@@ -249,29 +325,13 @@ export const assess = (
     const spare: number =
       1 - current.utilization - reserve(state, name, now, settings);
     if (spare <= 0) return deny(`usage-reserve-${name}`);
-    const spent: number = state.runs
-      .flatMap((item): z.infer<typeof charge>[] => item.charges)
-      .filter(
-        (item): boolean =>
-          item.window === name && item.reset === current.resetsAt,
-      )
-      .reduce((sum: number, item): number => sum + item.amount, 0);
-    const budget: number = Math.min(spare, settings.share - spent);
-    if (budget <= 0) return deny(`usage-share-${name}`);
     if (running) continue;
-    const cost: number =
-      Math.max(
-        settings.initialCost,
-        ...state.runs.map((item): number =>
-          item.charges
-            .filter((entry): boolean => entry.window === name)
-            .reduce((sum: number, entry): number => sum + entry.amount, 0),
-        ),
-      ) * settings.safety;
-    if (cost > budget) return deny(`usage-capacity-${name}`);
+    const price: number = cost(state, name, settings);
+    if (price > spare) return deny(`usage-capacity-${name}`);
+    // Unused allowance expires at reset, so the same spare is spent faster near it.
     const delay: number = Math.max(
       settings.minimumRunSeconds * MILLISECONDS,
-      (remaining * cost) / budget,
+      (remaining * price) / spare,
     );
     const previous = state.runs.at(-1);
     if (previous && now - previous.start < delay)
