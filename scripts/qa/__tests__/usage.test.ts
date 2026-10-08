@@ -185,15 +185,6 @@ test("unseen hours use the flat rate", (): void => {
   expect(Usage.forecast(value, "seven_day", NOW, SETTINGS)).toBeCloseTo(0.168);
 });
 
-test("personal use since the last check defers QA", (): void => {
-  const value: Usage.Ledger = Usage.empty();
-  Usage.observe(value, { snapshot: snapshot() }, NOW - HOUR, SETTINGS);
-  Usage.observe(value, { snapshot: snapshot() }, NOW, SETTINGS);
-  expect(Usage.assess(value, NOW, SETTINGS).allowed).toBe(true);
-  Usage.observe(value, { snapshot: snapshot(0.12) }, NOW + HOUR, SETTINGS);
-  expect(Usage.assess(value, NOW + HOUR, SETTINGS).reason).toBe("usage-yield");
-});
-
 test("QA intervals never become personal usage samples", (): void => {
   const value: Usage.Ledger = state();
   value.runs.push({ id: "run", start: NOW + 1, end: null, charges: [] });

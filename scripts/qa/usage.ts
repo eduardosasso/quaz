@@ -285,19 +285,6 @@ const cost = (state: Ledger, name: Window, settings: Settings): number => {
     settings.safety
   );
 };
-const busy = (state: Ledger, now: number, settings: Settings): boolean =>
-  WINDOWS.some((name): boolean => {
-    const recent: Interval | undefined = personal(
-      state,
-      name,
-      now,
-      settings,
-    ).at(-1);
-
-    return (
-      !!recent && recent.end === state.samples.at(-1)?.at && recent.delta > 0
-    );
-  });
 export const assess = (
   state: Ledger,
   now: number,
@@ -317,7 +304,6 @@ export const assess = (
     return deny("usage-post-run");
   if (!running && state.runs.some((item): boolean => item.end === null))
     return deny("usage-active");
-  if (!running && busy(state, now, settings)) return deny("usage-yield");
   for (const name of WINDOWS) {
     const current = last.snapshot[name];
     const remaining: number = current.resetsAt * MILLISECONDS - now;
