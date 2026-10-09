@@ -329,8 +329,26 @@ test("reset requires a fresh meter and starts a new share", (): void => {
 
 test("meter regressions stop work", (): void => {
   const value: Usage.Ledger = state();
-  Usage.observe(value, { snapshot: snapshot(0.01) }, NOW + 1, SETTINGS);
+  expect(
+    Usage.observe(value, { snapshot: snapshot(0.01) }, NOW + 1, SETTINGS),
+  ).toBe("regression");
   expect(Usage.assess(value, NOW + 1, SETTINGS).reason).toBe("usage-cooldown");
+});
+
+test("a one-step meter drop is rounding, not a regression", (): void => {
+  for (const reading of [snapshot(0.09, 0.1), snapshot(0.1, 0.09)]) {
+    const value: Usage.Ledger = state();
+    expect(Usage.observe(value, { snapshot: reading }, NOW + 1, SETTINGS)).toBe(
+      "rounding",
+    );
+    expect(value.samples).toHaveLength(1);
+    expect(Usage.assess(value, NOW + 1, SETTINGS).allowed).toBe(true);
+  }
+  const live: Usage.Ledger = Usage.empty();
+  Usage.observe(live, { snapshot: snapshot(0.01, 0.52) }, NOW, SETTINGS);
+  expect(
+    Usage.observe(live, { snapshot: snapshot(0, 0.51) }, NOW + 1, SETTINGS),
+  ).toBe("rounding");
 });
 
 test("state survives restarts and charges interrupted runs", async (): Promise<void> => {
