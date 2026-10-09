@@ -51,6 +51,7 @@
     "historyDays": 14,
     "learningHours": 24,
     "minimumSampleSeconds": 300,
+    "meterStep": 0.01,
     "freshSeconds": 300,
     "activeProbeSeconds": 180,
     "probeSeconds": 3600,

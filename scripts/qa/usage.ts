@@ -101,12 +101,13 @@ export const event = (value: unknown, now: number): Report | undefined => {
       : {}),
   };
 };
+export type Rejection = "rounding" | "regression";
 export const observe = (
   state: Ledger,
   reading: Report,
   now: number,
   settings: Settings,
-): void => {
+): Rejection | undefined => {
   state.blockedUntil = Math.max(state.blockedUntil, reading.blockedUntil ?? 0);
   if (!reading.snapshot) return;
   const currentSnapshot: Snapshot = reading.snapshot;
@@ -119,19 +120,23 @@ export const observe = (
     state.runs.findLast(
       (item): boolean => (item.end ?? now) >= (previous?.at ?? now),
     );
+  const drop = (name: Window): number =>
+    previous?.snapshot[name].resetsAt === currentSnapshot[name].resetsAt
+      ? previous.snapshot[name].utilization - currentSnapshot[name].utilization
+      : 0;
   if (
     WINDOWS.some(
-      (name): boolean =>
-        previous?.snapshot[name].resetsAt === currentSnapshot[name].resetsAt &&
-        currentSnapshot[name].utilization < previous.snapshot[name].utilization,
+      (name): boolean => Math.round(drop(name) / settings.meterStep) > 1,
     )
   ) {
     state.blockedUntil = Math.max(
       state.blockedUntil,
       now + settings.probeSeconds * MILLISECONDS,
     );
-    return;
+    return "regression";
   }
+  // Meters report whole steps, so readings seconds apart can differ by one step.
+  if (WINDOWS.some((name): boolean => drop(name) > 0)) return "rounding";
   for (const name of WINDOWS) {
     const current: z.infer<typeof window> = currentSnapshot[name];
     const prior: z.infer<typeof window> | undefined = previous?.snapshot[name];
@@ -366,6 +371,15 @@ export const connect = async (
 
     return result;
   };
+  const record = (reading: Report): void => {
+    const rejection: Rejection | undefined = observe(
+      state,
+      reading,
+      now(),
+      settings,
+    );
+    if (rejection) log({ event: `usage-${rejection}`, ...reading });
+  };
   const status = (running: boolean): Decision => {
     const result: Decision = fault
       ? { allowed: false, reason: "usage-storage" }
@@ -398,7 +412,7 @@ export const connect = async (
       const reading: Report = report.parse(await probe());
       if (!reading.snapshot && !reading.blockedUntil)
         throw new Error("Usage probe has no subscription meters");
-      observe(state, reading, now(), settings);
+      record(reading);
       log({ event: "usage-probe", active: running, ...reading });
     } catch (error: unknown) {
       state.blockedUntil = Math.max(state.blockedUntil, state.nextProbe);
@@ -442,7 +456,7 @@ export const connect = async (
     update: (reading?: Report): Promise<Decision> =>
       serial(async (): Promise<Decision> => {
         if (reading) {
-          observe(state, report.parse(reading), now(), settings);
+          record(report.parse(reading));
           await save();
         }
         await refresh(true);
