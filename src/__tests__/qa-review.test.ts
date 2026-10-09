@@ -382,16 +382,34 @@ describe("compact QA schema", (): void => {
     expect(omitted.comparisons).toHaveLength(1);
     await expect(Review.assessment(input, root)).rejects.toThrow();
   });
-  test("design comparisons reference distinct observed controls", async (): Promise<void> => {
+  test("comparison outside the inventory becomes unknown", async (): Promise<void> => {
     for (const names of [
       ["Title", "Missing"],
       ["Title", "Title"],
     ]) {
       const input: Review.Assessment = report();
       input.design.comparisons[0].controls = names;
-      await expect(Review.assessment(input, root)).rejects.toThrow(
-        "inventoried controls",
+      input.design.comparisons[0].verdict = "concern";
+      input.design.comparisons[0].candidateId = input.candidates[0].id;
+      const log = spyOn(console, "log").mockImplementation((): void => {});
+      const value: Review.Assessment = await Review.assessment(input, root);
+      const events: string[] = log.mock.calls.map((call): string =>
+        String(call[0]),
       );
+      log.mockRestore();
+      expect(value.design.comparisons[0].verdict).toBe("unknown");
+      expect(value.design.comparisons[0].candidateId).toBeNull();
+      expect(value.candidates).toEqual(input.candidates);
+      expect(value.limitations.slice(input.limitations.length)).toEqual([
+        expect.stringContaining("comparison-0"),
+      ]);
+      expect(events).toEqual([
+        JSON.stringify({
+          event: "design-comparison-unmatched",
+          judgment: "comparison-0",
+          controls: names,
+        }),
+      ]);
     }
   });
   test("design inventory rejects repeated controls", async (): Promise<void> => {

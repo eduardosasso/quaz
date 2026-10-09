@@ -735,15 +735,51 @@ const linked = <T extends Pick<Judgment, "verdict" | "candidateId">>(
 
   return { ...judgment, verdict: "unknown", candidateId: null } as T;
 };
+const UNMATCHED_EVENT: string = "design-comparison-unmatched";
+const UNMATCHED_LIMITATION: string =
+  "Design comparison naming controls outside the inventory was recorded as unknown";
+type Comparison = Assessment["design"]["comparisons"][number];
+const matched = (
+  comparison: Comparison,
+  name: string,
+  controls: string[],
+  limitations: string[],
+): Comparison => {
+  if (
+    new Set(comparison.controls).size === comparison.controls.length &&
+    comparison.controls.every((control: string): boolean =>
+      controls.includes(control),
+    )
+  )
+    return comparison;
+  console.log(
+    JSON.stringify({
+      event: UNMATCHED_EVENT,
+      judgment: name,
+      controls: comparison.controls,
+    }),
+  );
+  limitations.push(`${UNMATCHED_LIMITATION} (${name})`);
+
+  return { ...comparison, verdict: "unknown", candidateId: null };
+};
 const linking = (value: Assessment): Assessment => {
   const candidates: string[] = value.candidates.map(
     (candidate): string => candidate.id,
   );
+  const controls: string[] = value.design.controls.map(
+    (control): string => control.name,
+  );
   const limitations: string[] = [];
   const comparisons: Assessment["design"]["comparisons"] =
     value.design.comparisons.map(
-      (comparison, index: number): typeof comparison =>
-        linked(comparison, `comparison-${index}`, candidates, limitations),
+      (comparison, index: number): Comparison =>
+        linked(
+          matched(comparison, `comparison-${index}`, controls, limitations),
+          `comparison-${index}`,
+          candidates,
+          limitations,
+        ),
     );
   const composition: Judgment = linked(
     value.design.composition,
@@ -774,17 +810,6 @@ export const assessment = async (
   );
   if (new Set(controls).size !== controls.length)
     throw new Error("Design control names must be distinct");
-  for (const comparison of value.design.comparisons) {
-    if (
-      new Set(comparison.controls).size !== comparison.controls.length ||
-      comparison.controls.some(
-        (name: string): boolean => !controls.includes(name),
-      )
-    )
-      throw new Error(
-        "Design comparisons must reference distinct inventoried controls",
-      );
-  }
   if (
     (value.design.comparisons.length === 0) !==
     (value.design.noPeers !== null)
