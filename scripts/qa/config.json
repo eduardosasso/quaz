@@ -50,7 +50,6 @@
     "safety": 1.5,
     "historyDays": 14,
     "learningHours": 24,
-    "trendHours": 6,
     "minimumSampleSeconds": 300,
     "freshSeconds": 300,
     "activeProbeSeconds": 180,

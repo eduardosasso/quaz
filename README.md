@@ -73,7 +73,7 @@ The guard reads actual five-hour and weekly meters from Claude's `rate_limit_eve
 The policy lives in `scripts/qa/config.json`, under `usage`:
 
 - Keep at least 50% available while learning from the first 24 hours of usable idle observations.
-- Forecast personal use until each reset from a weekly profile. Each hour of the week uses the busiest rate seen in that hour in any recorded week. Hours without data use the higher of the recent six-hour rate and the recorded average. Reserve that forecast plus a ten-point `margin`. The margin is the part of each window that QA never uses.
+- Forecast personal use until each reset from a weekly profile. Each hour of the week uses the busiest rate seen in that hour in any recorded week. Hours without data use the recorded average, so a work burst does not fill quiet hours. Reserve that forecast plus a ten-point `margin`. The margin is the part of each window that QA never uses.
 - Exclude QA intervals and reset crossings from personal usage learning. Keep 14 days of history. Concurrent personal use during QA counts conservatively toward QA consumption.
 - Allow only one QA run at a time, at least one hour apart. Estimate the next run from the average recorded run, with a safety factor. Spread the spare allowance until reset. The same spare allows more frequent runs as the reset gets closer, because unused allowance expires.
 - Require both meters to be less than five minutes old. Pause on missing data, expired windows, cooldowns, or storage failures. Check before each model phase and monitor its response stream. Stop that phase when a reserve is reached.

@@ -233,14 +233,7 @@ export const forecast = (
 ): number => {
   const items: Interval[] = personal(state, name, now, settings);
   const slots: Map<number, number> = profile(items);
-  const flat: number = Math.max(
-    rate(items),
-    rate(
-      items.filter(
-        (item): boolean => item.start >= now - settings.trendHours * HOUR,
-      ),
-    ),
-  );
+  const flat: number = rate(items);
   const reset: number =
     (state.samples.at(-1)?.snapshot[name].resetsAt ?? 0) * MILLISECONDS;
   let total: number = 0;
