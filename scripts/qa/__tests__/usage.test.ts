@@ -128,7 +128,7 @@ test("personal use raises the reserve and slows scheduling", (): void => {
   const value: Usage.Ledger = Usage.empty();
   Usage.observe(value, { snapshot: snapshot(0.1, 0.1) }, NOW - DAY, SETTINGS);
   Usage.observe(value, { snapshot: snapshot(0.1, 0.1) }, NOW - HOUR, SETTINGS);
-  Usage.observe(value, { snapshot: snapshot(0.1, 0.12) }, NOW, SETTINGS);
+  Usage.observe(value, { snapshot: snapshot(0.1, 0.6) }, NOW, SETTINGS);
   expect(Usage.reserve(value, "seven_day", NOW, SETTINGS)).toBe(1);
   expect(Usage.assess(value, NOW, SETTINGS, true).reason).toBe(
     "usage-reserve-seven_day",
@@ -183,6 +183,18 @@ test("unseen hours use the flat rate", (): void => {
     NOW + 7 * DAY,
   );
   expect(Usage.forecast(value, "seven_day", NOW, SETTINGS)).toBeCloseTo(0.168);
+});
+
+test("a work burst does not fill unseen hours", (): void => {
+  const value: Usage.Ledger = history(
+    NOW - 2 * DAY,
+    2 * 24,
+    (hour: number): number => (hour >= 45 ? 0.03 : 0),
+    NOW + DAY,
+  );
+  expect(Usage.forecast(value, "seven_day", NOW, SETTINGS)).toBeCloseTo(
+    (0.09 / 48) * 24,
+  );
 });
 
 test("QA intervals never become personal usage samples", (): void => {
