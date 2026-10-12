@@ -147,7 +147,12 @@ export type Flow = {
   run: string;
   expires: number;
   status: string;
+  covered: string | null;
 };
+export const REVIEWED: string[] = ["complete", "partial"];
+// Another review of a covered revision would repeat work on unchanged code.
+export const reviewed = (flow: Flow, revision: string): boolean =>
+  flow.covered === revision;
 export type State = {
   flows: Flow[];
   tickets: Ticket[];

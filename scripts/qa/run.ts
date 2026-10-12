@@ -561,7 +561,10 @@ export const run = async (
                 await client.request<Protocol.State>(
                   `/state?project=${encodeURIComponent(project.id)}`,
                 )
-              ).flows,
+              ).flows.map((flow: Protocol.Flow) => ({
+                ...flow,
+                reviewed: Protocol.reviewed(flow, authority.run.revision),
+              })),
             );
           if (
             path === "/claim" &&
