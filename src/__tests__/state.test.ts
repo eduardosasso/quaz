@@ -596,6 +596,66 @@ test("state counts open QA cards", async () => {
   expect((await state.state("other")).open).toBe(1);
 });
 
+const review = async (
+  state: ReturnType<typeof fixture>["state"],
+  status: Protocol.Finish["status"],
+  input: Protocol.Begin = begin("discover"),
+): Promise<Protocol.Run> => {
+  const run: Protocol.Run = state.begin(input);
+  state.ready(run.id);
+  expect(await state.claim(run.id, "save-draft", "Save retains text")).toBe(
+    true,
+  );
+  await Finish.publish(state, run.id, {
+    status,
+    summary: "No issues",
+    report: {},
+    findings: [],
+    evidence: [],
+    verdict: "none",
+    deployment: null,
+  });
+
+  return run;
+};
+
+test("a reviewed flow is not repeated on the same revision", async () => {
+  const { state } = fixture();
+  await review(state, "partial");
+  expect(
+    (await state.state("sample")).flows.map((flow) => flow.covered),
+  ).toEqual([revision]);
+  const next: Protocol.Run = state.begin(begin("discover"));
+  state.ready(next.id);
+  const log = spyOn(console, "log").mockImplementation((): void => {});
+  expect(await state.claim(next.id, "save-draft", "Save retains text")).toBe(
+    false,
+  );
+  expect(log.mock.calls.map((call): string => String(call[0]))).toContain(
+    JSON.stringify({
+      event: "flow-reviewed",
+      run: next.id,
+      key: "save-draft",
+      revision,
+    }),
+  );
+  log.mockRestore();
+  expect(await state.claim(next.id, "cancel-draft", "Cancel keeps text")).toBe(
+    true,
+  );
+  await review(state, "complete", {
+    ...begin("discover"),
+    revision: "c".repeat(40),
+  });
+});
+
+test("a failed review leaves the flow open", async () => {
+  const { state } = fixture();
+  await review(state, "failed");
+  expect((await state.state("sample")).flows[0]?.covered).toBeNull();
+  await review(state, "partial");
+});
+
 test("discovery retries after a partial issue card write", async () => {
   const { state, cards, files } = fixture();
   const input: Protocol.Begin = begin("discover");

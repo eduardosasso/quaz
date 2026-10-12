@@ -18,6 +18,7 @@ import * as Pool from "@/pool";
 import * as Protocol from "@/qa_protocol";
 import type * as Tracker from "@/tracker";
 
+const FLOWS: string = `SELECT f.key,f.goal,f.run,f.expires,f.status,CASE WHEN r.status IN (${Protocol.REVIEWED.map((status: string): string => `'${status}'`).join(",")}) THEN r.revision END AS covered FROM qa_flows f LEFT JOIN qa_runs r ON r.id=f.run`;
 const MILLISECONDS: number = 1000;
 const DAY_MILLISECONDS: number = 24 * 60 * 60 * MILLISECONDS;
 const FILE_MODE: number = 0o600;
@@ -698,7 +699,7 @@ export const open = (
     return {
       flows: db
         .query<Protocol.Flow, [string]>(
-          "SELECT key,goal,run,expires,status FROM qa_flows WHERE project=? ORDER BY expires,key",
+          `${FLOWS} WHERE f.project=? ORDER BY f.expires,f.key`,
         )
         .all(project),
       tickets,
@@ -749,6 +750,28 @@ export const open = (
     } else if (ticket !== undefined) conflict("Discovery cannot claim a card");
     return db.transaction((): boolean => {
       active(id);
+      const previous: Protocol.Flow | null = db
+        .query<Protocol.Flow, [string, string]>(
+          `${FLOWS} WHERE f.project=? AND f.key=?`,
+        )
+        .get(value.project, key);
+      if (
+        value.mode === "discover" &&
+        previous &&
+        previous.run !== id &&
+        Protocol.reviewed(previous, value.revision)
+      ) {
+        console.log(
+          JSON.stringify({
+            event: "flow-reviewed",
+            run: id,
+            key,
+            revision: value.revision,
+          }),
+        );
+
+        return false;
+      }
       const changed = db
         .query(`INSERT INTO qa_flows (project,key,goal,run,expires) VALUES (?,?,?,?,?)
         ON CONFLICT(project,key) DO UPDATE SET goal=excluded.goal,run=excluded.run,expires=excluded.expires,status='partial'
