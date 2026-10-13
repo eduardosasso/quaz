@@ -142,7 +142,7 @@ export const create = (
       inputSchema: {
         key: z.string().min(1),
         goal: z.string().min(1),
-        area: z.string().min(1).optional(),
+        area: z.string().min(1).max(60).optional(),
       },
     },
     async ({ key, goal, area }) => {
