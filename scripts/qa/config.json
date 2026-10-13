@@ -62,5 +62,13 @@
     "monitorSeconds": 1,
     "heartbeatSeconds": 30,
     "readBytes": 65536
+  },
+  "areas": {
+    "model": "sonnet",
+    "limit": 40,
+    "pathBytes": 32768,
+    "docBytes": 8192,
+    "seconds": 120,
+    "docs": ["PRODUCT.md", "README.md"]
   }
 }

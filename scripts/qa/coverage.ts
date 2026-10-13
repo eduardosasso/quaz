@@ -1,3 +1,4 @@
+import type { Ranked as Area } from "@qa/areas";
 import * as Usage from "@qa/usage";
 import * as ErrorName from "@/error";
 import {
@@ -47,8 +48,14 @@ export const catalog = async (): Promise<Catalog> =>
 export const publication = async (): Promise<Catalog | null> =>
   catalogSchema.nullable().parse(await request<unknown>("/publication", {}));
 export const list = async (): Promise<Flow[]> => request<Flow[]>("/flows");
-export const claim = async (key: string, goal: string): Promise<boolean> =>
-  (await request<{ accepted: boolean }>("/claim", { key, goal })).accepted;
+export const areas = async (): Promise<Area[]> => request<Area[]>("/areas");
+export const claim = async (
+  key: string,
+  goal: string,
+  area?: string,
+): Promise<boolean> =>
+  (await request<{ accepted: boolean }>("/claim", { key, goal, area }))
+    .accepted;
 if (import.meta.main) {
   const [command, key, goal]: string[] = process.argv.slice(2);
   if (command === "list") console.log(JSON.stringify(await list()));

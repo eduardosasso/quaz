@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import * as Areas from "@qa/areas";
 import * as Client from "@qa/client";
 import CONFIG from "@qa/config.json";
 import * as Docker from "@qa/docker";
@@ -151,6 +152,7 @@ export class Drift extends Error {
 export class Interrupted extends Error {
   override name: string = "Interrupted";
 }
+const AREAS_FILE: string = "areas.json";
 const INTERRUPTION: string = "QA run interrupted before completion";
 export const revision = async (
   project: Project.Project,
@@ -502,6 +504,15 @@ export const run = async (
       input.runtime?.directory ?? input.output ?? join(ROOT, "artifacts/qa");
     await mkdir(temporary, { recursive: true });
     const scratch: string = await mkdtemp(join(temporary, "temporary-"));
+    const areas: Areas.Area[] =
+      input.mode === "discover"
+        ? await Areas.load(
+            project,
+            join(temporary, AREAS_FILE),
+            (event: Record<string, unknown>): void =>
+              console.log(JSON.stringify(event)),
+          )
+        : [];
     const prefix: string = `qa-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const records: Protocol.Run[] = [];
     const attempts: string[] = [];
@@ -566,21 +577,40 @@ export const run = async (
                 reviewed: Protocol.reviewed(flow, authority.run.revision),
               })),
             );
+          if (path === "/areas" && request.method === "GET")
+            return Response.json(
+              Areas.rank(
+                areas,
+                (
+                  await client.request<Protocol.State>(
+                    `/state?project=${encodeURIComponent(project.id)}`,
+                  )
+                ).flows,
+              ),
+            );
           if (
             path === "/claim" &&
             request.method === "POST" &&
             authority.run.mode === "discover"
           ) {
             const body = z
-              .object({ key: Protocol.key, goal: z.string().min(1).max(500) })
+              .object({
+                key: Protocol.key,
+                goal: z.string().min(1).max(500),
+                area: z.string().min(1).max(60).optional(),
+              })
               .strict()
               .parse(await request.json());
             return Response.json(
-              await client.request(
-                `/runs/${authority.run.id}/claim`,
-                "POST",
-                body,
-              ),
+              await client.request(`/runs/${authority.run.id}/claim`, "POST", {
+                key: body.key,
+                goal: body.goal,
+                area: areas.some(
+                  (item: Areas.Area): boolean => item.name === body.area,
+                )
+                  ? body.area
+                  : null,
+              }),
             );
           }
           return new Response("Not found", { status: 404 });

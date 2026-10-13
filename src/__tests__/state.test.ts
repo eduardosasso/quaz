@@ -649,6 +649,20 @@ test("a reviewed flow is not repeated on the same revision", async () => {
   });
 });
 
+test("a claim stores its app area", async () => {
+  const { state } = fixture();
+  const run: Protocol.Run = state.begin(begin("discover"));
+  state.ready(run.id);
+  expect(
+    await state.claim(run.id, "save-draft", "Save text", undefined, "Boards"),
+  ).toBe(true);
+  expect(await state.claim(run.id, "open-card", "Open a card")).toBe(true);
+  const flows = (await state.state("sample")).flows;
+  expect(
+    Object.fromEntries(flows.map((item) => [item.key, item.area])),
+  ).toEqual({ "save-draft": "Boards", "open-card": null });
+});
+
 test("a failed review leaves the flow open", async () => {
   const { state } = fixture();
   await review(state, "failed");

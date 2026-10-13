@@ -137,17 +137,22 @@ export const create = (
   server.registerTool(
     "claim",
     {
-      description: "Claim one stable QA flow for this run before testing it.",
-      inputSchema: { key: z.string().min(1), goal: z.string().min(1) },
+      description:
+        "Claim one stable QA flow for this run before testing it. Pass the exact name of its app area when an area list was supplied.",
+      inputSchema: {
+        key: z.string().min(1),
+        goal: z.string().min(1),
+        area: z.string().min(1).optional(),
+      },
     },
-    async ({ key, goal }) => {
+    async ({ key, goal, area }) => {
       try {
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
-                accepted: await actions.claim(key, goal),
+                accepted: await actions.claim(key, goal, area),
               }),
             },
           ],
