@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import CONFIG from "@qa/config.json";
 import type * as Project from "@qa/project";
+import * as Provider from "@qa/provider";
 import { z } from "zod";
 import type * as Protocol from "@/qa_protocol";
 
@@ -92,62 +93,74 @@ export const prompt = (input: Input): string =>
     `Source file paths:\n${input.paths}`,
     `Product notes:\n${input.docs || "(none)"}`,
   ].join("\n\n");
+export const argumentsFor = (input: Input): string[] => [
+  "claude",
+  "-p",
+  "--safe-mode",
+  "--strict-mcp-config",
+  "--setting-sources",
+  "",
+  "--tools",
+  "",
+  "--no-session-persistence",
+  "--permission-mode",
+  "dontAsk",
+  "--model",
+  CONFIG.areas.model,
+  "--effort",
+  "low",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--json-schema",
+  Provider.schema(output),
+  prompt(input),
+];
+const result = z.object({
+  type: z.literal("result"),
+  is_error: z.boolean().optional(),
+  structured_output: z.unknown().optional(),
+});
+export const parse = (raw: string): Area[] => {
+  const final = raw
+    .split("\n")
+    .filter((line: string): boolean => line.startsWith("{"))
+    .map((line: string) => result.safeParse(JSON.parse(line)))
+    .filter((frame) => frame.success)
+    .at(-1)?.data;
+  if (!final || final.is_error) throw new Error("Area map returned no result");
+
+  return output.parse(final.structured_output).areas;
+};
 export const generate: Generate = async (input: Input): Promise<Area[]> => {
   const token: string = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
   if (!token) throw new Error("Missing Claude credential for the area map");
   const directory: string = await mkdtemp(join(tmpdir(), "quaz-areas-"));
   try {
-    const child = Bun.spawn(
-      [
-        "claude",
-        "-p",
-        "--safe-mode",
-        "--strict-mcp-config",
-        "--setting-sources",
-        "",
-        "--tools",
-        "",
-        "--no-session-persistence",
-        "--permission-mode",
-        "dontAsk",
-        "--model",
-        CONFIG.areas.model,
-        "--effort",
-        "low",
-        "--output-format",
-        "json",
-        "--json-schema",
-        JSON.stringify(z.toJSONSchema(output)),
-        prompt(input),
-      ],
-      {
-        cwd: directory,
-        env: {
-          PATH: process.env.PATH,
-          HOME: directory,
-          CLAUDE_CONFIG_DIR: join(directory, "config"),
-          CLAUDE_CODE_OAUTH_TOKEN: token,
-        },
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "ignore",
-        timeout: CONFIG.areas.seconds * MILLISECONDS,
+    const child = Bun.spawn(argumentsFor(input), {
+      cwd: directory,
+      env: {
+        PATH: process.env.PATH,
+        HOME: directory,
+        CLAUDE_CONFIG_DIR: join(directory, "config"),
+        CLAUDE_CODE_OAUTH_TOKEN: token,
       },
-    );
-    const [raw, code] = await Promise.all([
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: CONFIG.areas.seconds * MILLISECONDS,
+    });
+    const [raw, errors, code] = await Promise.all([
       new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
       child.exited,
     ]);
-    if (code !== 0) throw new Error(`Area map failed (exit ${code})`);
-    const result = z
-      .object({
-        is_error: z.boolean().optional(),
-        structured_output: z.unknown(),
-      })
-      .parse(JSON.parse(raw));
-    if (result.is_error) throw new Error("Area map returned an error");
+    if (code !== 0)
+      throw new Error(
+        `Area map failed: ${Provider.failure(errors, raw)} (exit ${code})`,
+      );
 
-    return output.parse(result.structured_output).areas;
+    return parse(raw);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

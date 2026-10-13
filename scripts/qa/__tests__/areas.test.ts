@@ -203,3 +203,26 @@ test("least reviewed areas come first", (): void => {
     "Billing:2",
   ]);
 });
+
+test("the Claude call sends a schema without a $schema key", (): void => {
+  const args: string[] = Areas.argumentsFor({ paths: "src/a.ts", docs: "" });
+  const schema = JSON.parse(args[args.indexOf("--json-schema") + 1] ?? "{}");
+  expect(schema.$schema).toBeUndefined();
+  expect(schema.properties.areas.type).toBe("array");
+  expect(args.at(-1)).toContain("src/a.ts");
+});
+
+test("the final result frame holds the areas", (): void => {
+  const frames: string = [
+    JSON.stringify({ type: "system", subtype: "init" }),
+    JSON.stringify({
+      type: "result",
+      is_error: false,
+      structured_output: { areas: AREAS },
+    }),
+  ].join("\n");
+  expect(Areas.parse(frames)).toEqual(AREAS);
+  expect(() =>
+    Areas.parse(JSON.stringify({ type: "result", is_error: true })),
+  ).toThrow("Area map returned no result");
+});
