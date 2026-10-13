@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -203,7 +203,7 @@ export const load = async (
     const areas: Area[] = distinct(
       await create({ paths: outline(list), docs: await docs(project) }),
     );
-    const temporary: string = `${path}.tmp`;
+    const temporary: string = `${path}.${randomUUID()}.tmp`;
     await writeFile(
       temporary,
       JSON.stringify({ project: project.id, signature: key, areas }),
