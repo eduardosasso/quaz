@@ -38,7 +38,7 @@ Use `--mode discover` for a guided review. The controller selects reported fixes
 
 ## App areas
 
-Discovery runs steer toward the least-reviewed parts of the app. Quaz builds a list of user-facing areas from the target's source file paths and its `PRODUCT.md` or `README.md`. It never reads file contents for this list. One small Claude call names the areas. Quaz stores the list in `areas.json` on the runtime volume and reuses it until a file is added, removed, or renamed.
+Discovery runs steer toward the least-reviewed parts of the app. Quaz builds a list of user-facing areas from the target's source file paths and its `PRODUCT.md` or `README.md`. It reads no source file contents, only paths. It also sends the start of `PRODUCT.md` or `README.md` to the Claude call. One small Claude call names the areas. Quaz stores the list in `areas.json` on the runtime volume and reuses it until a file is added, removed, or renamed.
 
 The reviewer receives the areas with the least-reviewed first and names the area in its flow claim. Quaz counts finished reviews per area. The project config can set `map` to the paths that describe the app's screens, such as `["app/routes", "app/views"]`. Without it, Quaz uses `sources`. Remote targets have no source, so their runs choose flows as before. A failed map is logged as `areas-error`, and the run continues without areas.
 

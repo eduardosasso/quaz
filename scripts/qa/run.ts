@@ -118,6 +118,13 @@ const files = (path: string): string[] => {
         .flatMap((name: string): string[] => files(join(path, name)))
     : [path];
 };
+export const claimArea = (
+  areas: Areas.Area[],
+  name: string | undefined,
+): string | null =>
+  areas.some((item: Areas.Area): boolean => item.name === name)
+    ? (name ?? null)
+    : null;
 export const source = (project: Project.Project): string => {
   const digest = createHash("sha256").update(
     JSON.stringify({ adapter: project.adapter, settings: project.settings }),
@@ -605,11 +612,7 @@ export const run = async (
               await client.request(`/runs/${authority.run.id}/claim`, "POST", {
                 key: body.key,
                 goal: body.goal,
-                area: areas.some(
-                  (item: Areas.Area): boolean => item.name === body.area,
-                )
-                  ? body.area
-                  : null,
+                area: claimArea(areas, body.area),
               }),
             );
           }
