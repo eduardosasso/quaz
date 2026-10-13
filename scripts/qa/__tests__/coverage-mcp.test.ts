@@ -56,8 +56,12 @@ test("reviewer claims a flow through the scoped MCP tool", async () => {
   let claimed: string = "";
   const server = Coverage.create({
     list: async () => [],
-    claim: async (key: string, goal: string): Promise<boolean> => {
-      claimed = `${key}:${goal}`;
+    claim: async (
+      key: string,
+      goal: string,
+      area?: string,
+    ): Promise<boolean> => {
+      claimed = `${key}:${goal}:${area}`;
 
       return true;
     },
@@ -77,12 +81,12 @@ test("reviewer claims a flow through the scoped MCP tool", async () => {
     ]);
     const result = await client.callTool({
       name: "claim",
-      arguments: { key: "home-add-task", goal: "Add a task" },
+      arguments: { key: "home-add-task", goal: "Add a task", area: "Home" },
     });
     expect(result.content).toEqual([
       { type: "text", text: '{"accepted":true}' },
     ]);
-    expect(claimed).toBe("home-add-task:Add a task");
+    expect(claimed).toBe("home-add-task:Add a task:Home");
   } finally {
     await client.close();
     await server.close();

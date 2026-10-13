@@ -148,6 +148,7 @@ export type Flow = {
   expires: number;
   status: string;
   covered: string | null;
+  area: string | null;
 };
 export const REVIEWED: string[] = ["complete", "partial"];
 // Another review of a covered revision would repeat work on unchanged code.

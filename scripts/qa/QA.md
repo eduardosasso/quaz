@@ -24,6 +24,7 @@ List shared coverage, then claim the discovered flow before testing:
 Use `mcp__coverage__list`, then `mcp__coverage__claim` with a stable flow slug and short goal.
 Use a general flow name without fixture, tester, or random identifiers. Rejected claims require a different flow.
 A listed flow with `reviewed: true` was already reviewed on this app revision, and its claim is rejected. Choose a different task, not a renamed variant of a reviewed flow.
+When the prompt lists app areas, choose the flow from the first area you can reach in this scenario. Pass that area's exact name as `area` in the claim.
 Define one expected result before acting. Exercise its success, prevention, failure, recovery, return, and persistence paths.
 Write acceptance criteria only for the reproduced problem. Each criterion must be checkable by repeating the saved steps.
 Do not add hypothetical failure cases, alternative fixes, or untested behavior to a ticket's acceptance criteria.

@@ -18,7 +18,7 @@ import * as Pool from "@/pool";
 import * as Protocol from "@/qa_protocol";
 import type * as Tracker from "@/tracker";
 
-const FLOWS: string = `SELECT f.key,f.goal,f.run,f.expires,f.status,CASE WHEN r.status IN (${Protocol.REVIEWED.map((status: string): string => `'${status}'`).join(",")}) THEN r.revision END AS covered FROM qa_flows f LEFT JOIN qa_runs r ON r.id=f.run`;
+const FLOWS: string = `SELECT f.key,f.goal,f.run,f.expires,f.status,f.area,CASE WHEN r.status IN (${Protocol.REVIEWED.map((status: string): string => `'${status}'`).join(",")}) THEN r.revision END AS covered FROM qa_flows f LEFT JOIN qa_runs r ON r.id=f.run`;
 const MILLISECONDS: number = 1000;
 const DAY_MILLISECONDS: number = 24 * 60 * 60 * MILLISECONDS;
 const FILE_MODE: number = 0o600;
@@ -104,6 +104,7 @@ export type State = {
     key: string,
     goal: string,
     ticket?: number,
+    area?: string | null,
   ) => Promise<boolean>;
   finding: (note: number) => FindingRow | null;
 };
@@ -206,6 +207,14 @@ export const prepare = (db: Database): void => {
     db.exec("ALTER TABLE qa_runs ADD COLUMN runner TEXT");
   if (!columns.has("report"))
     db.exec("ALTER TABLE qa_runs ADD COLUMN report TEXT");
+  const flowColumns: Set<string> = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(qa_flows)")
+      .all()
+      .map((column): string => column.name),
+  );
+  if (!flowColumns.has("area"))
+    db.exec("ALTER TABLE qa_flows ADD COLUMN area TEXT");
   if (!artifactColumns.has("file"))
     db.exec("ALTER TABLE qa_artifacts ADD COLUMN file TEXT");
   if (!columns.has("recorded"))
@@ -731,6 +740,7 @@ export const open = (
     key: string,
     goal: string,
     ticket?: number,
+    area: string | null = null,
   ): Promise<boolean> => {
     const value: RunRow = active(id);
     if (value.mode === "smoke") conflict("Smoke runs cannot claim work");
@@ -773,10 +783,10 @@ export const open = (
         return false;
       }
       const changed = db
-        .query(`INSERT INTO qa_flows (project,key,goal,run,expires) VALUES (?,?,?,?,?)
-        ON CONFLICT(project,key) DO UPDATE SET goal=excluded.goal,run=excluded.run,expires=excluded.expires,status='partial'
+        .query(`INSERT INTO qa_flows (project,key,goal,run,expires,area) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(project,key) DO UPDATE SET goal=excluded.goal,run=excluded.run,expires=excluded.expires,area=excluded.area,status='partial'
         WHERE qa_flows.expires<=? OR qa_flows.run=excluded.run`)
-        .run(value.project, key, goal, id, value.expires, Date.now());
+        .run(value.project, key, goal, id, value.expires, area, Date.now());
       if (changed.changes && ticket !== undefined && value.target === null)
         db.query(
           "UPDATE qa_runs SET target=?,snapshot=?,scenario=? WHERE id=?",

@@ -348,6 +348,7 @@ export const open = async (
             key: Protocol.key,
             goal: z.string().min(1).max(500),
             ticket: z.number().int().positive().optional(),
+            area: z.string().min(1).max(60).nullable().optional(),
           })
           .strict()
           .parse(body);
@@ -357,6 +358,7 @@ export const open = async (
             input.key,
             input.goal,
             input.ticket,
+            input.area,
           ),
         };
       } else if (method === "POST" && publication)

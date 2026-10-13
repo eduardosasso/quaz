@@ -135,6 +135,7 @@ describe("QA controller scheduling", (): void => {
           expires: NOW + 1,
           status: "partial",
           covered: null,
+          area: null,
         },
       ],
     });

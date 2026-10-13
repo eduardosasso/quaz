@@ -36,6 +36,12 @@ Complete a QA card with a fix link (a pull request or commit in `deployment.repo
 
 Use `--mode discover` for a guided review. The controller selects reported fixes for `--mode verify`, once per deployed revision. `QUAZ_DB` is the only store for run state. One process at a time owns it through an exclusive lock on `QUAZ_DB.lock`. On first start, Quaz migrates an old Overdew board document snapshot into `QUAZ_DB` once. Set `QUAZ_BOOTSTRAP=empty` for a new board; Quaz refuses it when the board already has QA cards for the project. Remove that setting after the first start.
 
+## App areas
+
+Discovery runs steer toward the least-reviewed parts of the app. Quaz builds a list of user-facing areas from the target's source file paths and its `PRODUCT.md` or `README.md`. It reads no source file contents, only paths. It also sends the start of `PRODUCT.md` or `README.md` to the Claude call. One small Claude call names the areas. Quaz stores the list in `areas.json` on the runtime volume and reuses it until a file is added, removed, or renamed.
+
+The reviewer receives the areas with the least-reviewed first and names the area in its flow claim. Quaz counts finished reviews per area. The project config can set `map` to the paths that describe the app's screens, such as `["app/routes", "app/views"]`. Without it, Quaz uses `sources`. Remote targets have no source, so their runs choose flows as before. A failed map is logged as `areas-error`, and the run continues without areas.
+
 ## Development
 
 ```sh

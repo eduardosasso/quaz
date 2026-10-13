@@ -32,28 +32,24 @@ const contextPath = z.string().refine((value: string): boolean => {
       (part: string): boolean => Boolean(part) && ![".", ".."].includes(part),
     );
 }, "Context must stay inside /app");
+const inside = z
+  .string()
+  .refine(
+    (value: string): boolean =>
+      Boolean(value) &&
+      !value.startsWith("/") &&
+      !value
+        .split("/")
+        .some((part: string): boolean => ["", ".", ".."].includes(part)),
+    "Sources must stay inside the project root",
+  );
 export const schema = z
   .object({
     id: z.string().regex(/^[a-z0-9][a-z0-9_-]+$/),
     root: z.string().default("."),
     dockerfile: z.string().default(""),
-    sources: z
-      .array(
-        z
-          .string()
-          .refine(
-            (value: string): boolean =>
-              Boolean(value) &&
-              !value.startsWith("/") &&
-              !value
-                .split("/")
-                .some((part: string): boolean =>
-                  ["", ".", ".."].includes(part),
-                ),
-            "Sources must stay inside the project root",
-          ),
-      )
-      .default([]),
+    sources: z.array(inside).default([]),
+    map: z.array(inside).optional(),
     adapter: z.string().startsWith("/").default("/quaz/scripts/qa/command.ts"),
     context: z.array(contextPath).default([]),
     settings: z.record(z.string(), z.string()).default({}),
