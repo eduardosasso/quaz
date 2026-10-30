@@ -1955,7 +1955,7 @@ test("known fingerprint on a completed card reopens it from the finding review",
   expect(comments.get(issue.id)?.at(-1)).toContain(
     "reproduces this issue again",
   );
-  expect(new Set(lists)).toEqual(new Set([undefined, Tracker.STATUSES]));
+  expect(new Set(lists)).toEqual(new Set([undefined]));
 });
 
 test("known fingerprint on an archived card reopens it", async () => {
@@ -1999,7 +1999,7 @@ test("verify ticket on an archived card is found by id", async () => {
   ).toEqual([issue.id]);
 });
 
-test("state reads finding cards from one board listing", async () => {
+test("state reads only its own finding cards, not the whole board", async () => {
   const { state } = fixture();
   const findings: number = 12;
   for (let note: number = 1; note <= findings; note++)
@@ -2024,8 +2024,8 @@ test("state reads finding cards from one board listing", async () => {
     return null;
   };
   await state.state("sample");
-  expect(gets).toBe(0);
-  expect(listed).toEqual([Tracker.STATUSES, undefined]);
+  expect(gets).toBe(findings);
+  expect(listed).toEqual([undefined]);
 });
 
 const cohort = async (

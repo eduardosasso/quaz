@@ -14,8 +14,9 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import * as Fix from "@/fix";
+import * as Pool from "@/pool";
 import * as Protocol from "@/qa_protocol";
-import * as Tracker from "@/tracker";
+import type * as Tracker from "@/tracker";
 
 const FLOWS: string = `SELECT f.key,f.goal,f.run,f.expires,f.status,f.area,CASE WHEN r.status IN (${Protocol.REVIEWED.map((status: string): string => `'${status}'`).join(",")}) THEN r.revision END AS covered FROM qa_flows f LEFT JOIN qa_runs r ON r.id=f.run`;
 const MILLISECONDS: number = 1000;
@@ -472,17 +473,10 @@ export const open = (
         "SELECT * FROM qa_findings WHERE project=? ORDER BY note_id",
       )
       .all(project);
-    // One paged board read per poll; a card missing from it is deleted or
-    // moved off the board, exactly what a per-card read reports as null.
-    const board: Map<number, Tracker.Card> = new Map(
-      rows.length
-        ? (await tracker.list(Tracker.STATUSES)).map(
-            (card): [number, Tracker.Card] => [card.id, card],
-          )
-        : [],
-    );
-    const cards: (Tracker.Card | null)[] = rows.map(
-      (row): Tracker.Card | null => board.get(row.note_id) ?? null,
+    const cards: (Tracker.Card | null)[] = await Pool.map(
+      rows,
+      CARD_READS,
+      (row) => tracker.get(row.note_id),
     );
     const dismissed: Set<number> = new Set(
       db
