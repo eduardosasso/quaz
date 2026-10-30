@@ -1936,7 +1936,7 @@ const closedFixture = async (
   };
 };
 
-test("known fingerprint on a completed card reopens it without listing", async () => {
+test("known fingerprint on a completed card reopens it from the finding review", async () => {
   const { state, cards, comments, lists, issue, run, result } =
     await closedFixture(COMPLETED);
   const catalog: Protocol.Catalog | null = await state.publication(run.id);
@@ -1955,7 +1955,7 @@ test("known fingerprint on a completed card reopens it without listing", async (
   expect(comments.get(issue.id)?.at(-1)).toContain(
     "reproduces this issue again",
   );
-  expect(lists.every((statuses): boolean => statuses === undefined)).toBe(true);
+  expect(new Set(lists)).toEqual(new Set([undefined, Tracker.STATUSES]));
 });
 
 test("known fingerprint on an archived card reopens it", async () => {
@@ -1999,30 +1999,33 @@ test("verify ticket on an archived card is found by id", async () => {
   ).toEqual([issue.id]);
 });
 
-test("state polls finding cards with bounded concurrency", async () => {
+test("state reads finding cards from one board listing", async () => {
   const { state } = fixture();
-  const reads: number = State.CARD_READS * 3;
-  for (let note: number = 1; note <= reads; note++)
+  const findings: number = 12;
+  for (let note: number = 1; note <= findings; note++)
     state.db
       .query(
         "INSERT INTO qa_findings (project,fingerprint,note_id,test) VALUES (?,?,?,?)",
       )
       .run("sample", `fingerprint-${note}`, note, "{}");
-  const get: Tracker.Tracker["get"] = state.tracker.get;
-  let flying: number = 0;
-  let peak: number = 0;
-  let total: number = 0;
-  state.tracker.get = async (id: number): Promise<Tracker.Card | null> => {
-    total++;
-    peak = Math.max(peak, ++flying);
-    await Bun.sleep(1);
-    flying--;
+  const list: Tracker.Tracker["list"] = state.tracker.list;
+  const listed: (readonly string[] | undefined)[] = [];
+  let gets: number = 0;
+  state.tracker.list = async (
+    statuses?: readonly string[],
+  ): Promise<Tracker.Card[]> => {
+    listed.push(statuses);
 
-    return await get(id);
+    return await list(statuses);
+  };
+  state.tracker.get = async (): Promise<Tracker.Card | null> => {
+    gets++;
+
+    return null;
   };
   await state.state("sample");
-  expect(total).toBe(reads);
-  expect(peak).toBe(State.CARD_READS);
+  expect(gets).toBe(0);
+  expect(listed).toEqual([Tracker.STATUSES, undefined]);
 });
 
 const cohort = async (

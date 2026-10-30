@@ -96,6 +96,52 @@ test("card listing limits concurrent comment requests", async () => {
   expect(peak).toBe(8);
 });
 
+test("repeat listing reads comments only for changed cards", async () => {
+  const versions: Map<number, number> = new Map([
+    [1, 1],
+    [2, 1],
+  ]);
+  const threads: number[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+    const url: string = String(input);
+    if (url.endsWith("/boards/destinations"))
+      return Response.json([{ id: 1, workspace: "owner", slug: "board" }]);
+    if (url.includes("/notes/search"))
+      return Response.json({
+        notes: [...versions].map(([id, version]) => ({
+          id,
+          board_id: 1,
+          version,
+          content: `Card ${id}`,
+          description: "",
+          checklist: "[]",
+          tags: "",
+          status: 0,
+        })),
+        nextCursor: null,
+      });
+    const thread = url.match(/\/notes\/(\d+)\/comments$/);
+    if (thread) {
+      threads.push(Number(thread[1]));
+      return Response.json([{ body: `v${versions.get(Number(thread[1]))}` }]);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  await tracker.list();
+  versions.set(2, 2);
+  const cards = await tracker.list();
+  expect(threads).toEqual([1, 2, 2]);
+  expect(cards.map((card): string[] => card.comments)).toEqual([
+    ["v1"],
+    ["v2"],
+  ]);
+});
+
 test("failed comment batch finishes before listing retries", async () => {
   let active: number = 0;
   let peak: number = 0;

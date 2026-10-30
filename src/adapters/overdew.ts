@@ -200,11 +200,21 @@ export const connect = (
       throw new Error(`Card API ${method} ${path} returned ${response.status}`);
     return response;
   };
-  const comments = async (id: number): Promise<string[]> =>
-    z
+  // A new comment bumps the card version, so an unchanged version means an
+  // unchanged thread and the controller's polls skip the comment request.
+  const threads: Map<number, { version: number; comments: string[] }> =
+    new Map();
+  const comments = async (id: number, version: number): Promise<string[]> => {
+    const cached = threads.get(id);
+    if (cached?.version === version) return cached.comments;
+    const fresh: string[] = z
       .array(commentSchema)
       .parse(await json(await request(`/notes/${id}/comments`)))
       .map((entry): string => entry.body);
+    threads.set(id, { version, comments: fresh });
+
+    return fresh;
+  };
   let boardId: number | undefined;
   const selectedBoard = async (): Promise<number> => {
     if (boardId) return boardId;
@@ -228,7 +238,7 @@ export const connect = (
     const card = cardSchema.parse(await json(response));
     if (card.board_id !== (await selectedBoard()))
       throw new Error(`Card ${card.id} moved outside the selected board`);
-    return asCard(card, await comments(card.id));
+    return asCard(card, await comments(card.id, card.version));
   };
   const guard = async (id: number): Promise<void> => {
     if (!(await tracker.get(id)))
@@ -346,7 +356,7 @@ export const connect = (
                 .slice(index, index + COMMENT_CONCURRENCY)
                 .map(
                   async (raw): Promise<Tracker.Card> =>
-                    asCard(raw, await comments(raw.id)),
+                    asCard(raw, await comments(raw.id, raw.version)),
                 ),
             );
           for (const result of batch) {
@@ -375,7 +385,7 @@ export const connect = (
         );
       const card = cardSchema.parse(await json(response));
       if (card.board_id !== (await selectedBoard())) return null;
-      return asCard(card, await comments(id));
+      return asCard(card, await comments(id, card.version));
     },
     create: async (title: string, key: string): Promise<Tracker.Card> => {
       const pendingTitle: string = `${title} ${marker(key)}`;
