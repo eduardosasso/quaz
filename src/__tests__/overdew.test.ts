@@ -142,6 +142,45 @@ test("repeat listing reads comments only for changed cards", async () => {
   ]);
 });
 
+test("repeat get reads comments only when the card version changes", async () => {
+  let version: number = 1;
+  const threads: number[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+    const url: string = String(input);
+    if (url.endsWith("/boards/destinations"))
+      return Response.json([{ id: 1, workspace: "owner", slug: "board" }]);
+    if (url.endsWith("/notes/7"))
+      return Response.json({
+        id: 7,
+        board_id: 1,
+        version,
+        content: "Card 7",
+        description: "",
+        checklist: "[]",
+        tags: "",
+        status: 0,
+      });
+    if (url.endsWith("/notes/7/comments")) {
+      threads.push(version);
+      return Response.json([{ body: `v${version}` }]);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  const tracker = Overdew.connect(
+    "https://tracker.test",
+    "owner/board",
+    "token",
+  );
+  await tracker.get(7);
+  const again = await tracker.get(7);
+  expect(threads).toEqual([1]);
+  expect(again?.comments).toEqual(["v1"]);
+  version = 2;
+  const changed = await tracker.get(7);
+  expect(threads).toEqual([1, 2]);
+  expect(changed?.comments).toEqual(["v2"]);
+});
+
 test("failed comment batch finishes before listing retries", async () => {
   let active: number = 0;
   let peak: number = 0;
