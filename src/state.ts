@@ -476,7 +476,7 @@ export const open = (
     const cards: (Tracker.Card | null)[] = await Pool.map(
       rows,
       CARD_READS,
-      (row): Promise<Tracker.Card | null> => tracker.get(row.note_id),
+      (row) => tracker.get(row.note_id),
     );
     const dismissed: Set<number> = new Set(
       db
