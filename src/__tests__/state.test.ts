@@ -2011,6 +2011,8 @@ test("state reads only its own finding cards, not the whole board", async () => 
   const list: Tracker.Tracker["list"] = state.tracker.list;
   const listed: (readonly string[] | undefined)[] = [];
   let gets: number = 0;
+  let active: number = 0;
+  let peak: number = 0;
   state.tracker.list = async (
     statuses?: readonly string[],
   ): Promise<Tracker.Card[]> => {
@@ -2020,11 +2022,16 @@ test("state reads only its own finding cards, not the whole board", async () => 
   };
   state.tracker.get = async (): Promise<Tracker.Card | null> => {
     gets++;
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    active--;
 
     return null;
   };
   await state.state("sample");
   expect(gets).toBe(findings);
+  expect(peak).toBe(State.CARD_READS);
   expect(listed).toEqual([undefined]);
 });
 
