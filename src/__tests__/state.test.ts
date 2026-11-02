@@ -2032,7 +2032,7 @@ test("state reads only its own finding cards, not the whole board", async () => 
   await state.state("sample");
   expect(gets).toBe(findings);
   expect(peak).toBe(State.CARD_READS);
-  expect(listed).toEqual([undefined]);
+  expect(listed).toEqual([]);
 });
 
 const cohort = async (
